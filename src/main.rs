@@ -135,7 +135,7 @@ fn sanitize_branch_name(branch: &str) -> String {
     branch.replace('/', "-")
 }
 
-fn prompt_llvm_dir() -> PathBuf {
+fn prompt_llvm_dir() -> Option<PathBuf> {
     let env_default = std::env::var("LLVM_AIRFRYER_LLVM_SOURCE_PATH").ok();
     let theme = ColorfulTheme::default();
 
@@ -151,7 +151,12 @@ fn prompt_llvm_dir() -> PathBuf {
             .expect("failed to read input"),
     };
 
-    let llvm_dir = PathBuf::from(shellexpand::tilde(llvm_path.trim()).into_owned())
+    let trimmed = llvm_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let llvm_dir = PathBuf::from(shellexpand::tilde(trimmed).into_owned())
         .canonicalize()
         .unwrap_or_else(|_| {
             eprintln!("Path does not exist: {llvm_path}");
@@ -166,7 +171,7 @@ fn prompt_llvm_dir() -> PathBuf {
         std::process::exit(1);
     }
 
-    llvm_dir
+    Some(llvm_dir)
 }
 
 fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBuf) {
@@ -235,8 +240,8 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
     );
 }
 
-fn build_llvm_upstream() {
-    let llvm_dir = prompt_llvm_dir();
+fn build_llvm_upstream() -> bool {
+    let Some(llvm_dir) = prompt_llvm_dir() else { return false };
     let install_dir = project_root().join("bin").join("llvm-upstream");
 
     build_and_install_llvm(&llvm_dir, "main", &install_dir);
@@ -244,6 +249,7 @@ fn build_llvm_upstream() {
 
     println!("\n✅ LLVM upstream build complete!");
     println!("   Clang: {}/bin/clang++", install_dir.display());
+    true
 }
 
 fn git_branches(repo_dir: &PathBuf) -> Vec<String> {
@@ -259,8 +265,8 @@ fn git_branches(repo_dir: &PathBuf) -> Vec<String> {
         .collect()
 }
 
-fn build_llvm_branch() {
-    let llvm_dir = prompt_llvm_dir();
+fn build_llvm_branch() -> bool {
+    let Some(llvm_dir) = prompt_llvm_dir() else { return false };
 
     let branches = git_branches(&llvm_dir);
     if branches.is_empty() {
@@ -272,10 +278,11 @@ fn build_llvm_branch() {
         .with_prompt("Branch to build (type to search)")
         .items(&branches)
         .default(0)
-        .interact()
+        .interact_opt()
         .expect("failed to select branch");
 
-    let branch = &branches[selection];
+    let Some(idx) = selection else { return false };
+    let branch = &branches[idx];
 
     let dir_name = format!("llvm-{}", sanitize_branch_name(branch));
     let install_dir = project_root().join("bin").join(&dir_name);
@@ -285,9 +292,10 @@ fn build_llvm_branch() {
 
     println!("\n✅ LLVM branch '{branch}' build complete!");
     println!("   Clang: {}/bin/clang++", install_dir.display());
+    true
 }
 
-fn build_zig_custom_llvm() {
+fn build_zig_custom_llvm() -> bool {
     let bin_dir = project_root().join("bin");
     let zig_src = bin_dir.join("zig-source");
 
@@ -327,12 +335,14 @@ fn build_zig_custom_llvm() {
         .with_prompt("Zig version to build (type to search)")
         .items(&zig_refs)
         .default(0)
-        .interact()
+        .interact_opt()
         .expect("failed to select Zig version");
 
-    let zig_ref = zig_refs[zig_sel]
+    let Some(zig_idx) = zig_sel else { return false };
+
+    let zig_ref = zig_refs[zig_idx]
         .strip_prefix("tag: ")
-        .unwrap_or(&zig_refs[zig_sel]);
+        .unwrap_or(&zig_refs[zig_idx]);
 
     println!("Checking out Zig '{zig_ref}'...");
     run_cmd("git", &["checkout", zig_ref], &zig_src, &format!("git checkout {zig_ref}"));
@@ -349,10 +359,12 @@ fn build_zig_custom_llvm() {
         .with_prompt("Which LLVM build to use?")
         .items(&llvm_names)
         .default(0)
-        .interact()
+        .interact_opt()
         .expect("failed to select LLVM build");
 
-    let (llvm_id, llvm_exe, _) = &llvm_builds[llvm_sel];
+    let Some(llvm_idx) = llvm_sel else { return false };
+
+    let (llvm_id, llvm_exe, _) = &llvm_builds[llvm_idx];
     let llvm_install_dir = llvm_exe.parent().unwrap().parent().unwrap();
 
     let zig_ref_sanitized = sanitize_branch_name(zig_ref);
@@ -411,6 +423,7 @@ fn build_zig_custom_llvm() {
 
     println!("\n✅ Zig build complete (backed by LLVM {llvm_id})!");
     println!("   Zig: {}/bin/zig", install_dir.display());
+    true
 }
 
 fn git_tags(repo_dir: &PathBuf) -> Vec<String> {
@@ -612,23 +625,36 @@ fn regenerate_ce_config() {
 fn main() {
     println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit\n");
 
-    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("What would you like to do? (type to search)")
-        .items(MENU_ITEMS)
-        .default(0)
-        .interact()
-        .expect("failed to render interactive menu");
+    loop {
+        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("What would you like to do? (type to search, Esc to quit)")
+            .items(MENU_ITEMS)
+            .default(0)
+            .interact_opt()
+            .expect("failed to render interactive menu");
 
-    match selection {
-        0 => download_compiler_explorer(),
-        1 => run_compiler_explorer(),
-        2 => build_llvm_upstream(),
-        3 => build_llvm_branch(),
-        4 => build_zig_custom_llvm(),
-        5 => {
+        let Some(idx) = selection else {
             println!("Goodbye!");
-            std::process::exit(0);
+            break;
+        };
+
+        let go_back = match idx {
+            0 => { download_compiler_explorer(); false }
+            1 => { run_compiler_explorer(); false }
+            2 => !build_llvm_upstream(),
+            3 => !build_llvm_branch(),
+            4 => !build_zig_custom_llvm(),
+            5 => {
+                println!("Goodbye!");
+                break;
+            }
+            _ => unreachable!(),
+        };
+
+        if !go_back {
+            break;
         }
-        _ => unreachable!(),
+        // go_back == true means user pressed Esc in a sub-prompt, loop back to menu
+        println!();
     }
 }

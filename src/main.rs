@@ -1,4 +1,4 @@
-use dialoguer::console::style;
+use dialoguer::console::{Term, style};
 use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
@@ -77,7 +77,7 @@ impl Config {
     }
 }
 
-fn download_compiler_explorer() {
+fn download_compiler_explorer() -> bool {
     let dest = ce_dir();
 
     if dest.exists() {
@@ -90,10 +90,10 @@ fn download_compiler_explorer() {
             .expect("failed to run git pull");
         if !status.success() {
             eprintln!("git pull failed");
-            std::process::exit(1);
+            return false;
         }
         println!("Compiler Explorer updated successfully.");
-        return;
+        return true;
     }
 
     let home = airfryer_home();
@@ -108,21 +108,22 @@ fn download_compiler_explorer() {
 
     if !status.success() {
         eprintln!("git clone failed");
-        std::process::exit(1);
+        return false;
     }
     println!("Compiler Explorer downloaded successfully.");
+    true
 }
 
 fn find_available_port(start: u16) -> Option<u16> {
     (start..=u16::MAX).find(|&port| TcpListener::bind(("127.0.0.1", port)).is_ok())
 }
 
-fn run_compiler_explorer() {
+fn run_compiler_explorer() -> bool {
     let ce_path = ce_dir();
 
     if !ce_path.exists() {
         eprintln!("Compiler Explorer not found. Please download it first.");
-        std::process::exit(1);
+        return false;
     }
 
     let node_modules = ce_path.join("node_modules");
@@ -135,14 +136,17 @@ fn run_compiler_explorer() {
             .expect("failed to run npm install");
         if !status.success() {
             eprintln!("npm install failed");
-            std::process::exit(1);
+            return false;
         }
     }
 
-    let port = find_available_port(CE_DEFAULT_PORT).unwrap_or_else(|| {
-        eprintln!("No available port found starting from {CE_DEFAULT_PORT}");
-        std::process::exit(1);
-    });
+    let port = match find_available_port(CE_DEFAULT_PORT) {
+        Some(p) => p,
+        None => {
+            eprintln!("No available port found starting from {CE_DEFAULT_PORT}");
+            return false;
+        }
+    };
 
     println!("Starting Compiler Explorer on http://localhost:{port} ...");
 
@@ -155,20 +159,24 @@ fn run_compiler_explorer() {
 
     if !status.success() {
         eprintln!("Compiler Explorer exited with an error");
-        std::process::exit(1);
+        return false;
     }
+    true
 }
 
-fn run_cmd(cmd: &str, args: &[&str], dir: &PathBuf, context: &str) {
-    let status = Command::new(cmd)
-        .args(args)
-        .current_dir(dir)
-        .status()
-        .unwrap_or_else(|e| panic!("failed to run {context}: {e}"));
+fn run_cmd(cmd: &str, args: &[&str], dir: &PathBuf, context: &str) -> bool {
+    let status = match Command::new(cmd).args(args).current_dir(dir).status() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("failed to run {context}: {e}");
+            return false;
+        }
+    };
     if !status.success() {
         eprintln!("{context} failed");
-        std::process::exit(1);
+        return false;
     }
+    true
 }
 
 fn has_ninja() -> bool {
@@ -207,19 +215,20 @@ fn prompt_llvm_dir() -> Option<PathBuf> {
         return None;
     }
 
-    let llvm_dir = PathBuf::from(shellexpand::tilde(trimmed).into_owned())
-        .canonicalize()
-        .unwrap_or_else(|_| {
+    let llvm_dir = match PathBuf::from(shellexpand::tilde(trimmed).into_owned()).canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
             eprintln!("Path does not exist: {llvm_path}");
-            std::process::exit(1);
-        });
+            return None;
+        }
+    };
 
     if !llvm_dir.join("llvm").exists() {
         eprintln!(
             "Invalid llvm-project directory: expected 'llvm/' subdirectory in {}",
             llvm_dir.display()
         );
-        std::process::exit(1);
+        return None;
     }
 
     // Persist the validated path to config
@@ -230,9 +239,11 @@ fn prompt_llvm_dir() -> Option<PathBuf> {
     Some(llvm_dir)
 }
 
-fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBuf) {
+fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBuf) -> bool {
     println!("Switching to branch '{branch}'...");
-    run_cmd("git", &["checkout", branch], llvm_dir, &format!("git checkout {branch}"));
+    if !run_cmd("git", &["checkout", branch], llvm_dir, &format!("git checkout {branch}")) {
+        return false;
+    }
 
     println!("Pulling latest changes...");
     // pull may fail for local-only branches — that's okay
@@ -271,7 +282,7 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
         .expect("failed to run cmake — is cmake installed?");
     if !status.success() {
         eprintln!("cmake configure failed");
-        std::process::exit(1);
+        return false;
     }
 
     let num_cpus = std::thread::available_parallelism()
@@ -280,27 +291,34 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
 
     println!("Building LLVM with {num_cpus} parallel jobs (this will take a while)...");
     let build_path = build_dir.to_str().unwrap().to_string();
-    run_cmd(
+    if !run_cmd(
         "cmake",
         &["--build", &build_path, "--config", "Release", "--parallel", &num_cpus],
         llvm_dir,
         "LLVM build",
-    );
+    ) {
+        return false;
+    }
 
     println!("Installing LLVM to {}...", install_dir.display());
-    run_cmd(
+    if !run_cmd(
         "cmake",
         &["--install", &build_path],
         llvm_dir,
         "LLVM install",
-    );
+    ) {
+        return false;
+    }
+    true
 }
 
 fn build_llvm_upstream() -> bool {
     let Some(llvm_dir) = prompt_llvm_dir() else { return false };
     let install_dir = builds_dir().join("llvm-upstream");
 
-    build_and_install_llvm(&llvm_dir, "main", &install_dir);
+    if !build_and_install_llvm(&llvm_dir, "main", &install_dir) {
+        return false;
+    }
     regenerate_ce_config();
 
     println!("\n✅ LLVM upstream build complete!");
@@ -327,7 +345,7 @@ fn build_llvm_branch() -> bool {
     let branches = git_branches(&llvm_dir);
     if branches.is_empty() {
         eprintln!("No branches found in {}", llvm_dir.display());
-        std::process::exit(1);
+        return false;
     }
 
     let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
@@ -343,7 +361,9 @@ fn build_llvm_branch() -> bool {
     let dir_name = format!("llvm-{}", sanitize_branch_name(branch));
     let install_dir = builds_dir().join(&dir_name);
 
-    build_and_install_llvm(&llvm_dir, branch, &install_dir);
+    if !build_and_install_llvm(&llvm_dir, branch, &install_dir) {
+        return false;
+    }
     regenerate_ce_config();
 
     println!("\n✅ LLVM branch '{branch}' build complete!");
@@ -358,7 +378,9 @@ fn build_zig_custom_llvm() -> bool {
     // Clone or update Zig source
     if zig_src.exists() {
         println!("Updating Zig source...");
-        run_cmd("git", &["fetch", "--all"], &zig_src, "git fetch");
+        if !run_cmd("git", &["fetch", "--all"], &zig_src, "git fetch") {
+            return false;
+        }
     } else {
         println!("Cloning Zig repository...");
         std::fs::create_dir_all(&bd).expect("failed to create builds directory");
@@ -369,7 +391,7 @@ fn build_zig_custom_llvm() -> bool {
             .expect("failed to run git clone");
         if !status.success() {
             eprintln!("git clone failed for Zig");
-            std::process::exit(1);
+            return false;
         }
     }
 
@@ -401,13 +423,15 @@ fn build_zig_custom_llvm() -> bool {
         .unwrap_or(&zig_refs[zig_idx]);
 
     println!("Checking out Zig '{zig_ref}'...");
-    run_cmd("git", &["checkout", zig_ref], &zig_src, &format!("git checkout {zig_ref}"));
+    if !run_cmd("git", &["checkout", zig_ref], &zig_src, &format!("git checkout {zig_ref}")) {
+        return false;
+    }
 
     // Pick which LLVM build to use
     let llvm_builds = discover_llvm_builds();
     if llvm_builds.is_empty() {
         eprintln!("No LLVM builds found. Build LLVM first.");
-        std::process::exit(1);
+        return false;
     }
 
     let llvm_names: Vec<&str> = llvm_builds.iter().map(|(_, _, d)| d.as_str()).collect();
@@ -451,7 +475,7 @@ fn build_zig_custom_llvm() -> bool {
         .expect("failed to run cmake for Zig");
     if !status.success() {
         eprintln!("Zig cmake configure failed");
-        std::process::exit(1);
+        return false;
     }
 
     let num_cpus = std::thread::available_parallelism()
@@ -460,20 +484,24 @@ fn build_zig_custom_llvm() -> bool {
 
     println!("Building Zig with {num_cpus} parallel jobs...");
     let build_path = build_dir.to_str().unwrap().to_string();
-    run_cmd(
+    if !run_cmd(
         "cmake",
         &["--build", &build_path, "--config", "Release", "--parallel", &num_cpus],
         &zig_src,
         "Zig build",
-    );
+    ) {
+        return false;
+    }
 
     println!("Installing Zig to {}...", install_dir.display());
-    run_cmd(
+    if !run_cmd(
         "cmake",
         &["--install", &build_path],
         &zig_src,
         "Zig install",
-    );
+    ) {
+        return false;
+    }
 
     regenerate_ce_config();
 
@@ -723,10 +751,31 @@ fn show_flag_presets() -> bool {
     true
 }
 
-fn main() {
-    let home = airfryer_home();
+fn pause_and_continue(home: &PathBuf) -> bool {
+    println!();
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Return to the main menu?")
+        .items(&["Yes", "No"])
+        .default(0)
+        .interact()
+        .unwrap_or(1);
+    if choice == 1 {
+        println!("Goodbye!");
+        return false;
+    }
+    let _ = Term::stdout().clear_screen();
+    print_header(home);
+    true
+}
+
+fn print_header(home: &PathBuf) {
     println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit");
     println!("   {}: {}\n", style("Home").dim(), style(home.display()).dim());
+}
+
+fn main() {
+    let home = airfryer_home();
+    print_header(&home);
 
     loop {
         let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
@@ -741,13 +790,13 @@ fn main() {
             break;
         };
 
-        let go_back = match idx {
-            0 => { download_compiler_explorer(); false }
-            1 => { run_compiler_explorer(); false }
-            2 => !build_llvm_upstream(),
-            3 => !build_llvm_branch(),
-            4 => !build_zig_custom_llvm(),
-            5 => !show_flag_presets(),
+        match idx {
+            0 => { download_compiler_explorer(); }
+            1 => { run_compiler_explorer(); }
+            2 => { build_llvm_upstream(); }
+            3 => { build_llvm_branch(); }
+            4 => { build_zig_custom_llvm(); }
+            5 => { show_flag_presets(); }
             6 => {
                 println!("Goodbye!");
                 break;
@@ -755,10 +804,8 @@ fn main() {
             _ => unreachable!(),
         };
 
-        if !go_back {
+        if !pause_and_continue(&home) {
             break;
         }
-        // go_back == true means user pressed Esc in a sub-prompt, loop back to menu
-        println!();
     }
 }

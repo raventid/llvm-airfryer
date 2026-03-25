@@ -1,17 +1,39 @@
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
+use serde::Deserialize;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
+const ZIG_REPO: &str = "git@github.com:ziglang/zig.git";
 const CE_DEFAULT_PORT: u16 = 10240;
+const CONFIG_FILE: &str = "config.toml";
 
 const MENU_ITEMS: &[&str] = &[
     "Download Compiler Explorer",
     "Run Compiler Explorer",
     "Build LLVM Upstream",
+    "Build LLVM Branch",
+    "Build Zig (Custom LLVM)",
     "Exit",
 ];
+
+#[derive(Deserialize, Default)]
+struct Config {
+    #[serde(default, rename = "llvm-path")]
+    llvm_path: Option<String>,
+}
+
+fn load_config() -> Config {
+    let config_path = project_root().join(CONFIG_FILE);
+    match std::fs::read_to_string(&config_path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
+            eprintln!("⚠ Failed to parse {CONFIG_FILE}: {e}");
+            Config::default()
+        }),
+        Err(_) => Config::default(),
+    }
+}
 
 fn project_root() -> PathBuf {
     let output = Command::new("cargo")
@@ -128,11 +150,25 @@ fn has_ninja() -> bool {
         .unwrap_or(false)
 }
 
-fn build_llvm_upstream() {
-    let llvm_path: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Path to llvm-project directory")
-        .interact_text()
-        .expect("failed to read input");
+fn sanitize_branch_name(branch: &str) -> String {
+    branch.replace('/', "-")
+}
+
+fn prompt_llvm_dir() -> PathBuf {
+    let config = load_config();
+    let theme = ColorfulTheme::default();
+
+    let llvm_path: String = match config.llvm_path {
+        Some(ref default_path) => Input::with_theme(&theme)
+            .with_prompt("Path to llvm-project directory")
+            .default(default_path.clone())
+            .interact_text()
+            .expect("failed to read input"),
+        None => Input::with_theme(&theme)
+            .with_prompt("Path to llvm-project directory")
+            .interact_text()
+            .expect("failed to read input"),
+    };
 
     let llvm_dir = PathBuf::from(shellexpand::tilde(llvm_path.trim()).into_owned())
         .canonicalize()
@@ -149,18 +185,25 @@ fn build_llvm_upstream() {
         std::process::exit(1);
     }
 
-    // Switch to main and pull latest
-    println!("Switching to main branch...");
-    run_cmd("git", &["checkout", "main"], &llvm_dir, "git checkout main");
+    llvm_dir
+}
+
+fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBuf) {
+    println!("Switching to branch '{branch}'...");
+    run_cmd("git", &["checkout", branch], llvm_dir, &format!("git checkout {branch}"));
 
     println!("Pulling latest changes...");
-    run_cmd("git", &["pull"], &llvm_dir, "git pull");
+    // pull may fail for local-only branches — that's okay
+    let _ = Command::new("git")
+        .args(["pull"])
+        .current_dir(llvm_dir)
+        .status();
 
-    let install_dir = project_root().join("bin").join("llvm-upstream");
-    let build_dir = llvm_dir.join("build-airfryer");
+    let build_dir_name = format!("build-airfryer-{}", sanitize_branch_name(branch));
+    let build_dir = llvm_dir.join(&build_dir_name);
 
     std::fs::create_dir_all(&build_dir).expect("failed to create build directory");
-    std::fs::create_dir_all(&install_dir).expect("failed to create install directory");
+    std::fs::create_dir_all(install_dir).expect("failed to create install directory");
 
     let generator = if has_ninja() { "Ninja" } else { "Unix Makefiles" };
 
@@ -198,7 +241,7 @@ fn build_llvm_upstream() {
     run_cmd(
         "cmake",
         &["--build", &build_path, "--config", "Release", "--parallel", &num_cpus],
-        &llvm_dir,
+        llvm_dir,
         "LLVM build",
     );
 
@@ -206,17 +249,260 @@ fn build_llvm_upstream() {
     run_cmd(
         "cmake",
         &["--install", &build_path],
-        &llvm_dir,
+        llvm_dir,
         "LLVM install",
     );
+}
 
-    configure_ce_for_upstream(&install_dir);
+fn build_llvm_upstream() {
+    let llvm_dir = prompt_llvm_dir();
+    let install_dir = project_root().join("bin").join("llvm-upstream");
+
+    build_and_install_llvm(&llvm_dir, "main", &install_dir);
+    regenerate_ce_config();
 
     println!("\n✅ LLVM upstream build complete!");
     println!("   Clang: {}/bin/clang++", install_dir.display());
 }
 
-fn configure_ce_for_upstream(install_dir: &PathBuf) {
+fn git_branches(repo_dir: &PathBuf) -> Vec<String> {
+    let output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)", "--sort=-committerdate"])
+        .current_dir(repo_dir)
+        .output()
+        .expect("failed to list git branches");
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn build_llvm_branch() {
+    let llvm_dir = prompt_llvm_dir();
+
+    let branches = git_branches(&llvm_dir);
+    if branches.is_empty() {
+        eprintln!("No branches found in {}", llvm_dir.display());
+        std::process::exit(1);
+    }
+
+    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Branch to build (type to search)")
+        .items(&branches)
+        .default(0)
+        .interact()
+        .expect("failed to select branch");
+
+    let branch = &branches[selection];
+
+    let dir_name = format!("llvm-{}", sanitize_branch_name(branch));
+    let install_dir = project_root().join("bin").join(&dir_name);
+
+    build_and_install_llvm(&llvm_dir, branch, &install_dir);
+    regenerate_ce_config();
+
+    println!("\n✅ LLVM branch '{branch}' build complete!");
+    println!("   Clang: {}/bin/clang++", install_dir.display());
+}
+
+fn build_zig_custom_llvm() {
+    let bin_dir = project_root().join("bin");
+    let zig_src = bin_dir.join("zig-source");
+
+    // Clone or update Zig source
+    if zig_src.exists() {
+        println!("Updating Zig source...");
+        run_cmd("git", &["fetch", "--all"], &zig_src, "git fetch");
+    } else {
+        println!("Cloning Zig repository...");
+        std::fs::create_dir_all(&bin_dir).expect("failed to create bin/ directory");
+        let status = Command::new("git")
+            .args(["clone", ZIG_REPO])
+            .arg(&zig_src)
+            .status()
+            .expect("failed to run git clone");
+        if !status.success() {
+            eprintln!("git clone failed for Zig");
+            std::process::exit(1);
+        }
+    }
+
+    // Pick Zig branch/tag
+    let zig_tags = git_tags(&zig_src);
+    let zig_branches = git_branches(&zig_src);
+    let mut zig_refs: Vec<String> = Vec::new();
+    zig_refs.push("master".to_string());
+    for tag in zig_tags.iter().rev().take(10) {
+        zig_refs.push(format!("tag: {tag}"));
+    }
+    for branch in &zig_branches {
+        if branch != "master" && !zig_refs.contains(branch) {
+            zig_refs.push(branch.clone());
+        }
+    }
+
+    let zig_sel = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Zig version to build (type to search)")
+        .items(&zig_refs)
+        .default(0)
+        .interact()
+        .expect("failed to select Zig version");
+
+    let zig_ref = zig_refs[zig_sel]
+        .strip_prefix("tag: ")
+        .unwrap_or(&zig_refs[zig_sel]);
+
+    println!("Checking out Zig '{zig_ref}'...");
+    run_cmd("git", &["checkout", zig_ref], &zig_src, &format!("git checkout {zig_ref}"));
+
+    // Pick which LLVM build to use
+    let llvm_builds = discover_llvm_builds();
+    if llvm_builds.is_empty() {
+        eprintln!("No LLVM builds found. Build LLVM first.");
+        std::process::exit(1);
+    }
+
+    let llvm_names: Vec<&str> = llvm_builds.iter().map(|(_, _, d)| d.as_str()).collect();
+    let llvm_sel = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which LLVM build to use?")
+        .items(&llvm_names)
+        .default(0)
+        .interact()
+        .expect("failed to select LLVM build");
+
+    let (llvm_id, llvm_exe, _) = &llvm_builds[llvm_sel];
+    let llvm_install_dir = llvm_exe.parent().unwrap().parent().unwrap();
+
+    let zig_ref_sanitized = sanitize_branch_name(zig_ref);
+    let install_dir = bin_dir.join(format!("zig-{zig_ref_sanitized}-{llvm_id}"));
+    let build_dir = zig_src.join(format!("build-airfryer-{llvm_id}"));
+
+    std::fs::create_dir_all(&build_dir).expect("failed to create Zig build directory");
+    std::fs::create_dir_all(&install_dir).expect("failed to create Zig install directory");
+
+    let generator = if has_ninja() { "Ninja" } else { "Unix Makefiles" };
+    let prefix_path = format!("-DCMAKE_PREFIX_PATH={}", llvm_install_dir.display());
+    let install_prefix = format!("-DCMAKE_INSTALL_PREFIX={}", install_dir.display());
+
+    println!("Configuring Zig (LLVM: {})...", llvm_install_dir.display());
+    let status = Command::new("cmake")
+        .args([
+            "-S",
+            zig_src.to_str().unwrap(),
+            "-B",
+            build_dir.to_str().unwrap(),
+            "-G",
+            generator,
+            "-DCMAKE_BUILD_TYPE=Release",
+            &prefix_path,
+            &install_prefix,
+        ])
+        .status()
+        .expect("failed to run cmake for Zig");
+    if !status.success() {
+        eprintln!("Zig cmake configure failed");
+        std::process::exit(1);
+    }
+
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get().to_string())
+        .unwrap_or_else(|_| "4".to_string());
+
+    println!("Building Zig with {num_cpus} parallel jobs...");
+    let build_path = build_dir.to_str().unwrap().to_string();
+    run_cmd(
+        "cmake",
+        &["--build", &build_path, "--config", "Release", "--parallel", &num_cpus],
+        &zig_src,
+        "Zig build",
+    );
+
+    println!("Installing Zig to {}...", install_dir.display());
+    run_cmd(
+        "cmake",
+        &["--install", &build_path],
+        &zig_src,
+        "Zig install",
+    );
+
+    regenerate_ce_config();
+
+    println!("\n✅ Zig build complete (backed by LLVM {llvm_id})!");
+    println!("   Zig: {}/bin/zig", install_dir.display());
+}
+
+fn git_tags(repo_dir: &PathBuf) -> Vec<String> {
+    let output = Command::new("git")
+        .args(["tag", "--sort=-version:refname"])
+        .current_dir(repo_dir)
+        .output()
+        .expect("failed to list git tags");
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Discover all bin/llvm-* builds with clang++ binaries.
+fn discover_llvm_builds() -> Vec<(String, PathBuf, String)> {
+    let bin_dir = project_root().join("bin");
+    let mut compilers: Vec<(String, PathBuf, String)> = Vec::new(); // (id, exe_path, display_name)
+
+    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("llvm-") {
+                continue;
+            }
+            let clang_bin = entry.path().join("bin").join("clang++");
+            if !clang_bin.exists() {
+                continue;
+            }
+            let branch_part = name.strip_prefix("llvm-").unwrap();
+            let id = sanitize_branch_name(branch_part);
+            let display = if branch_part == "upstream" {
+                "Clang Upstream (main)".to_string()
+            } else {
+                format!("Clang ({branch_part})")
+            };
+            compilers.push((id, clang_bin, display));
+        }
+    }
+
+    compilers.sort_by(|a, b| a.0.cmp(&b.0));
+    compilers
+}
+
+/// Discover all bin/zig-* builds with zig binaries.
+fn discover_zig_builds() -> Vec<(String, PathBuf, String)> {
+    let bin_dir = project_root().join("bin");
+    let mut compilers: Vec<(String, PathBuf, String)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("zig-") || name == "zig-source" {
+                continue;
+            }
+            let zig_bin = entry.path().join("bin").join("zig");
+            if !zig_bin.exists() {
+                continue;
+            }
+            let label = name.strip_prefix("zig-").unwrap();
+            let id = sanitize_branch_name(label);
+            let display = format!("Zig ({label})");
+            compilers.push((id, zig_bin, display));
+        }
+    }
+
+    compilers.sort_by(|a, b| a.0.cmp(&b.0));
+    compilers
+}
+
+/// Scan all bin/llvm-* and bin/zig-* directories and generate CE configs.
+fn regenerate_ce_config() {
     let ce_config_dir = project_root()
         .join("bin")
         .join("compiler-explorer")
@@ -225,39 +511,121 @@ fn configure_ce_for_upstream(install_dir: &PathBuf) {
 
     if !ce_config_dir.exists() {
         println!(
-            "⚠ Compiler Explorer not found — download it first, then re-run this command to configure."
+            "⚠ Compiler Explorer not found — download it first, then re-run to configure."
         );
         return;
     }
 
-    let clang_path = install_dir.join("bin").join("clang++");
-    let config_file = ce_config_dir.join("c++.local.properties");
+    let clang_compilers = discover_llvm_builds();
+    let zig_compilers = discover_zig_builds();
 
-    let config = format!(
-        "\
-# Auto-generated by llvm-airfryer
-compilers=&clang-upstream
+    if clang_compilers.is_empty() && zig_compilers.is_empty() {
+        println!("⚠ No custom builds found in bin/");
+        return;
+    }
 
-group.clang-upstream.compilers=clang-upstream-main
-group.clang-upstream.groupName=Clang Upstream (main)
-group.clang-upstream.intelAsm=-mllvm --x86-asm-syntax=intel
-group.clang-upstream.compilerType=clang
-group.clang-upstream.compilerCategories=clang
-group.clang-upstream.supportsBinary=true
-group.clang-upstream.supportsBinaryObject=true
-group.clang-upstream.supportsExecute=true
+    // --- C++ config ---
+    if !clang_compilers.is_empty() {
+        let group_refs: Vec<String> = clang_compilers.iter().map(|(id, _, _)| format!("&clang-{id}")).collect();
+        let mut cpp_config = String::from("# Auto-generated by llvm-airfryer — do not edit manually\n");
+        cpp_config.push_str(&format!(
+            "compilers=&gcc:&clang:{}\n",
+            group_refs.join(":")
+        ));
 
-compiler.clang-upstream-main.exe={}
-compiler.clang-upstream-main.name=Clang Upstream (main)
-",
-        clang_path.display()
-    );
+        for (id, exe, display) in &clang_compilers {
+            let group_id = format!("clang-{id}");
+            let compiler_id = format!("clang-{id}-compiler");
+            cpp_config.push_str(&format!(
+                "\n\
+                 group.{group_id}.compilers={compiler_id}\n\
+                 group.{group_id}.groupName={display}\n\
+                 group.{group_id}.intelAsm=-mllvm --x86-asm-syntax=intel\n\
+                 group.{group_id}.compilerType=clang\n\
+                 group.{group_id}.compilerCategories=clang\n\
+                 group.{group_id}.supportsBinary=true\n\
+                 group.{group_id}.supportsBinaryObject=true\n\
+                 group.{group_id}.supportsExecute=true\n\
+                 \n\
+                 compiler.{compiler_id}.exe={}\n\
+                 compiler.{compiler_id}.name={display}\n",
+                exe.display()
+            ));
+        }
 
-    std::fs::write(&config_file, &config).expect("failed to write CE config");
-    println!(
-        "📝 Compiler Explorer configured: {}",
-        config_file.display()
-    );
+        std::fs::write(ce_config_dir.join("c++.local.properties"), &cpp_config)
+            .expect("failed to write C++ CE config");
+    }
+
+    // --- LLVM IR config ---
+    if !clang_compilers.is_empty() {
+        let ir_compiler_ids: Vec<String> = clang_compilers
+            .iter()
+            .map(|(id, _, _)| format!("ir-{id}"))
+            .collect();
+        let mut ir_config = String::from("# Auto-generated by llvm-airfryer — do not edit manually\n");
+        ir_config.push_str(&format!(
+            "compilers=irclang:llc:opt:{}\n",
+            ir_compiler_ids.join(":")
+        ));
+
+        for (id, exe, display) in &clang_compilers {
+            let compiler_id = format!("ir-{id}");
+            let ir_display = display.replace("Clang", "Clang IR");
+            ir_config.push_str(&format!(
+                "\ncompiler.{compiler_id}.exe={}\n\
+                 compiler.{compiler_id}.name={ir_display}\n\
+                 compiler.{compiler_id}.intelAsm=-masm=intel\n\
+                 compiler.{compiler_id}.options=-x ir\n\
+                 compiler.{compiler_id}.compilerType=clang\n\
+                 compiler.{compiler_id}.supportsBinary=true\n\
+                 compiler.{compiler_id}.supportsExecute=true\n",
+                exe.display()
+            ));
+        }
+
+        std::fs::write(ce_config_dir.join("llvm.local.properties"), &ir_config)
+            .expect("failed to write LLVM IR CE config");
+    }
+
+    // --- Zig config ---
+    if !zig_compilers.is_empty() {
+        let zig_ids: Vec<String> = zig_compilers
+            .iter()
+            .map(|(id, _, _)| format!("zig-{id}"))
+            .collect();
+        let mut zig_config = String::from("# Auto-generated by llvm-airfryer — do not edit manually\n");
+        zig_config.push_str(&format!(
+            "compilers=zig:{}\n",
+            zig_ids.join(":")
+        ));
+
+        for (id, exe, display) in &zig_compilers {
+            let compiler_id = format!("zig-{id}");
+            zig_config.push_str(&format!(
+                "\ncompiler.{compiler_id}.exe={}\n\
+                 compiler.{compiler_id}.name={display}\n\
+                 compiler.{compiler_id}.compilerType=zig\n\
+                 compiler.{compiler_id}.supportsBinary=true\n\
+                 compiler.{compiler_id}.supportsExecute=true\n\
+                 compiler.{compiler_id}.versionFlag=version\n\
+                 compiler.{compiler_id}.isSemVer=true\n",
+                exe.display()
+            ));
+        }
+
+        std::fs::write(ce_config_dir.join("zig.local.properties"), &zig_config)
+            .expect("failed to write Zig CE config");
+    }
+
+    let total = clang_compilers.len() + zig_compilers.len();
+    println!("📝 Compiler Explorer configured with {total} custom compiler(s):");
+    for (_, _, display) in &clang_compilers {
+        println!("   • {display} (C++ & LLVM IR)");
+    }
+    for (_, _, display) in &zig_compilers {
+        println!("   • {display}");
+    }
 }
 
 fn main() {
@@ -274,7 +642,9 @@ fn main() {
         0 => download_compiler_explorer(),
         1 => run_compiler_explorer(),
         2 => build_llvm_upstream(),
-        3 => {
+        3 => build_llvm_branch(),
+        4 => build_zig_custom_llvm(),
+        5 => {
             println!("Goodbye!");
             std::process::exit(0);
         }

@@ -14,7 +14,7 @@ const MENU_ITEMS: &[&str] = &[
     "Build LLVM Upstream",
     "Build LLVM Branch",
     "Build Zig (Custom LLVM)",
-    "Get AVX-512 Compilation Flags",
+    "CE Flag Presets",
     "Exit",
 ];
 
@@ -624,11 +624,17 @@ fn regenerate_ce_config() {
     }
 }
 
-fn print_avx512_flags() {
-    let flags = "--target=x86_64-unknown-linux-gnu -O3 -S -mavx512f -mavx512vl -fno-exceptions -fno-rtti";
+const FLAG_PRESETS: &[(&str, &str)] = &[
+    ("AVX-512 (x86_64)", "--target=x86_64-unknown-linux-gnu -O3 -S -mavx512f -mavx512vl -fno-exceptions -fno-rtti"),
+    ("AVX2 (x86_64)", "--target=x86_64-unknown-linux-gnu -O3 -S -mavx2 -fno-exceptions -fno-rtti"),
+    ("AArch64 NEON", "--target=aarch64-unknown-linux-gnu -O3 -S -fno-exceptions -fno-rtti"),
+    ("AArch64 SVE", "--target=aarch64-unknown-linux-gnu -O3 -S -march=armv8-a+sve -fno-exceptions -fno-rtti"),
+    ("AArch64 SVE2", "--target=aarch64-unknown-linux-gnu -O3 -S -march=armv9-a+sve2 -fno-exceptions -fno-rtti"),
+    ("RISC-V Vector (RVV)", "--target=riscv64-unknown-linux-gnu -O3 -S -march=rv64gcv -fno-exceptions -fno-rtti"),
+    ("x86_64 baseline", "--target=x86_64-unknown-linux-gnu -O3 -S -fno-exceptions -fno-rtti"),
+];
 
-    println!("\n{}:\n", style("AVX-512 compilation flags for Compiler Explorer").cyan().bold());
-
+fn print_colored_flags(flags: &str) {
     let colored_parts: Vec<String> = flags.split_whitespace().map(|flag| {
         if flag.starts_with("--") {
             if let Some(eq) = flag.find('=') {
@@ -641,11 +647,28 @@ fn print_avx512_flags() {
         }
     }).collect();
     println!("{}", colored_parts.join("  "));
+}
 
-    println!("\n{}",
-        style("(copy the line above and paste into the Compiler Explorer options field)").dim()
-    );
+fn show_flag_presets() -> bool {
+    let preset_names: Vec<&str> = FLAG_PRESETS.iter().map(|(name, _)| *name).collect();
+
+    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select a flag preset")
+        .items(&preset_names)
+        .default(0)
+        .interact_opt()
+        .expect("failed to render preset menu");
+
+    let Some(idx) = selection else {
+        return false;
+    };
+
+    let (name, flags) = FLAG_PRESETS[idx];
+    println!("\n{}:\n", style(name).cyan().bold());
+    print_colored_flags(flags);
+    println!("\n{}", style("(copy the line above and paste into the Compiler Explorer options field)").dim());
     println!();
+    true
 }
 
 fn main() {
@@ -670,7 +693,7 @@ fn main() {
             2 => !build_llvm_upstream(),
             3 => !build_llvm_branch(),
             4 => !build_zig_custom_llvm(),
-            5 => { print_avx512_flags(); false }
+            5 => !show_flag_presets(),
             6 => {
                 println!("Goodbye!");
                 break;

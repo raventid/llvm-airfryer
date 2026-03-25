@@ -612,8 +612,8 @@ fn regenerate_ce_config() {
 fn main() {
     println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit\n");
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("What would you like to do?")
+    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("What would you like to do? (type to search)")
         .items(MENU_ITEMS)
         .default(0)
         .interact()

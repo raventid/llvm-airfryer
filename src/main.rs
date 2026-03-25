@@ -13,6 +13,7 @@ const MENU_ITEMS: &[&str] = &[
     "Build LLVM Upstream",
     "Build LLVM Branch",
     "Build Zig (Custom LLVM)",
+    "Get AVX-512 Compilation Flags",
     "Exit",
 ];
 
@@ -622,6 +623,12 @@ fn regenerate_ce_config() {
     }
 }
 
+fn print_avx512_flags() {
+    println!("\nAVX-512 compilation flags for Compiler Explorer:\n");
+    println!("--target=x86_64-unknown-linux-gnu -O3 -S -mavx512f -mavx512vl -fno-exceptions -fno-rtti");
+    println!();
+}
+
 fn main() {
     println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit\n");
 
@@ -644,7 +651,8 @@ fn main() {
             2 => !build_llvm_upstream(),
             3 => !build_llvm_branch(),
             4 => !build_zig_custom_llvm(),
-            5 => {
+            5 => { print_avx512_flags(); false }
+            6 => {
                 println!("Goodbye!");
                 break;
             }

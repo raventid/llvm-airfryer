@@ -16,6 +16,7 @@ const MENU_ITEMS: &[&str] = &[
     "Build LLVM Branch",
     "Build Zig (Custom LLVM)",
     "CE Flag Presets",
+    "Help & Configuration",
     "Exit",
 ];
 
@@ -23,28 +24,136 @@ fn airfryer_home() -> PathBuf {
     match std::env::var("LLVM_AIRFRYER_HOME") {
         Ok(home) => PathBuf::from(shellexpand::tilde(&home).into_owned()),
         Err(_) => {
-            eprintln!("{}: LLVM_AIRFRYER_HOME environment variable is not set.", style("Error").red().bold());
-            eprintln!();
-            eprintln!("This variable must point to the directory where llvm-airfryer stores");
-            eprintln!("its builds, Compiler Explorer, and configuration.");
-            eprintln!();
-            eprintln!("Add this to your shell config (~/.zshrc or ~/.bashrc):");
-            eprintln!();
-            eprintln!("  {}",
-                style("export LLVM_AIRFRYER_HOME=\"$HOME/.llvm_airfryer\"").green()
-            );
-            eprintln!();
-            eprintln!("Then restart your shell or run: {}", style("source ~/.zshrc").green());
-            std::process::exit(1);
+            // Check if default location exists (previously set up)
+            let default = default_home();
+            if default.join("config.toml").exists() {
+                return default;
+            }
+            // First run — launch setup wizard
+            run_setup_wizard()
         }
     }
 }
 
+fn default_home() -> PathBuf {
+    let home = std::env::var("HOME").expect("HOME environment variable not set");
+    PathBuf::from(home).join(".llvm_airfryer")
+}
+
+fn run_setup_wizard() -> PathBuf {
+    let _ = Term::stdout().clear_screen();
+    println!("{}", style("═══ LLVM Airfryer — First-Time Setup ═══").cyan().bold());
+    println!();
+    println!("Welcome! Let's configure where llvm-airfryer stores its data.");
+    println!();
+
+    let theme = ColorfulTheme::default();
+    let default_path = default_home();
+
+    // 1. Home directory
+    println!("{}", style("Step 1: Home directory").yellow().bold());
+    println!("  This is where config, builds, and Compiler Explorer will live.");
+    println!("  Heavy build artifacts can be moved later with env variables.\n");
+
+    let home_input: String = Input::with_theme(&theme)
+        .with_prompt("Home directory")
+        .default(default_path.display().to_string())
+        .interact_text()
+        .expect("failed to read input");
+
+    let home = PathBuf::from(shellexpand::tilde(home_input.trim()).into_owned());
+    std::fs::create_dir_all(&home).expect("failed to create home directory");
+
+    // 2. LLVM source path (optional)
+    println!("\n{}", style("Step 2: LLVM source path (optional)").yellow().bold());
+    println!("  If you have a local clone of llvm-project, enter its path.");
+    println!("  This is saved in {} and remembered for future sessions.", style("config.toml").green());
+    println!("  You can also override it with the {} env variable.", style("LLVM_AIRFRYER_LLVM_SOURCE_PATH").green());
+    println!("  If you skip this, the path will be saved to config automatically");
+    println!("  the first time you run a build command.\n");
+
+    let llvm_input: String = Input::with_theme(&theme)
+        .with_prompt("Path to llvm-project (leave empty to skip)")
+        .default(String::new())
+        .show_default(false)
+        .allow_empty(true)
+        .interact_text()
+        .expect("failed to read input");
+
+    let llvm_source_path = if llvm_input.trim().is_empty() {
+        None
+    } else {
+        let expanded = PathBuf::from(shellexpand::tilde(llvm_input.trim()).into_owned());
+        match expanded.canonicalize() {
+            Ok(p) if p.join("llvm").exists() => Some(p.display().to_string()),
+            Ok(p) => {
+                println!("  {} No 'llvm/' subdirectory found in {}. Skipping.", style("⚠").yellow(), p.display());
+                None
+            }
+            Err(_) => {
+                println!("  {} Path does not exist. Skipping.", style("⚠").yellow());
+                None
+            }
+        }
+    };
+
+    // 3. Write config
+    let config = Config { llvm_source_path };
+    let config_contents = toml::to_string_pretty(&config).expect("failed to serialize config");
+    std::fs::write(home.join("config.toml"), config_contents).expect("failed to write config.toml");
+
+    // 4. Set env var for current session
+    // Safe here: single-threaded at startup, no other threads reading env
+    unsafe { std::env::set_var("LLVM_AIRFRYER_HOME", &home); }
+
+    // 5. Show shell instructions
+    println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
+    println!();
+    println!("  Home directory: {}", style(home.display()).bold());
+    if let Some(ref llvm) = config.llvm_source_path {
+        println!("  LLVM source:    {}", style(llvm).bold());
+    }
+    println!();
+    println!("{}", style("ACTION REQUIRED:").yellow().bold());
+    println!("  Add this line to your shell config so llvm-airfryer finds its data next time:\n");
+
+    let export_line = format!("export LLVM_AIRFRYER_HOME=\"{}\"", home.display());
+    println!("  {}\n", style(&export_line).green().bold());
+
+    println!("  Add it to one of these files depending on your shell:");
+    println!("    {} — {}", style("zsh").bold(), style("~/.zshrc").dim());
+    println!("    {} — {}", style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim());
+    println!("    {} — {}", style("fish").bold(), style("~/.config/fish/config.fish").dim());
+    println!("           use: {}", style(format!("set -Ux LLVM_AIRFRYER_HOME \"{}\"", home.display())).dim());
+    println!();
+
+    let choice = Select::with_theme(&theme)
+        .with_prompt("What would you like to do?")
+        .items(&["Exit and update my shell config first", "Continue to main menu"])
+        .default(0)
+        .interact()
+        .unwrap_or(0);
+
+    if choice == 0 {
+        println!("\nRun llvm-airfryer again after updating your shell config. Goodbye!");
+        std::process::exit(0);
+    }
+
+    let _ = Term::stdout().clear_screen();
+    home
+}
+
 fn builds_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("LLVM_AIRFRYER_BUILDS_PATH") {
+        return PathBuf::from(shellexpand::tilde(&path).into_owned());
+    }
     airfryer_home().join("builds")
 }
 
 fn ce_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("LLVM_AIRFRYER_CE_PATH") {
+        return PathBuf::from(shellexpand::tilde(&path).into_owned());
+    }
     airfryer_home().join("compiler-explorer")
 }
 
@@ -81,25 +190,27 @@ fn download_compiler_explorer() -> bool {
     let dest = ce_dir();
 
     if dest.exists() {
-        println!("Compiler Explorer already exists at {}", dest.display());
-        println!("Pulling latest changes...");
+        println!("{} Compiler Explorer already exists at {}", style("ℹ").cyan(), style(dest.display()).dim());
+        println!("  Pulling latest changes from {}...", style(COMPILER_EXPLORER_REPO).blue().underlined());
         let status = Command::new("git")
             .args(["pull"])
             .current_dir(&dest)
             .status()
             .expect("failed to run git pull");
         if !status.success() {
-            eprintln!("git pull failed");
+            eprintln!("{} git pull failed", style("✗").red().bold());
             return false;
         }
-        println!("Compiler Explorer updated successfully.");
+        println!("\n{} Compiler Explorer updated successfully.", style("✔").green().bold());
         return true;
     }
 
     let home = airfryer_home();
     std::fs::create_dir_all(&home).expect("failed to create airfryer home directory");
 
-    println!("Cloning Compiler Explorer into {}...", dest.display());
+    println!("{} Downloading Compiler Explorer from:", style("⬇").cyan().bold());
+    println!("  {}", style(COMPILER_EXPLORER_REPO).blue().underlined());
+    println!("  → {}\n", style(dest.display()).dim());
     let status = Command::new("git")
         .args(["clone", "--depth=1", COMPILER_EXPLORER_REPO])
         .arg(&dest)
@@ -107,10 +218,11 @@ fn download_compiler_explorer() -> bool {
         .expect("failed to run git clone");
 
     if !status.success() {
-        eprintln!("git clone failed");
+        eprintln!("\n{} git clone failed", style("✗").red().bold());
         return false;
     }
-    println!("Compiler Explorer downloaded successfully.");
+    println!("\n{} Compiler Explorer downloaded successfully!", style("✔").green().bold());
+    println!("  You can now run it from the main menu.");
     true
 }
 
@@ -231,10 +343,13 @@ fn prompt_llvm_dir() -> Option<PathBuf> {
         return None;
     }
 
-    // Persist the validated path to config
-    let mut config = Config::load();
-    config.llvm_source_path = Some(llvm_dir.display().to_string());
-    config.save();
+    // Only save to config if no path is set yet (don't overwrite one-off usage)
+    let config = Config::load();
+    if config.llvm_source_path.is_none() {
+        let mut config = config;
+        config.llvm_source_path = Some(llvm_dir.display().to_string());
+        config.save();
+    }
 
     Some(llvm_dir)
 }
@@ -751,6 +866,60 @@ fn show_flag_presets() -> bool {
     true
 }
 
+fn show_help() {
+    let home = airfryer_home();
+    let bd = builds_dir();
+    let ce = ce_dir();
+
+    println!();
+    println!("{}", style("═══ LLVM Airfryer — Help & Configuration ═══").cyan().bold());
+
+    println!("\n{}", style("ABOUT").yellow().bold());
+    println!("  LLVM Airfryer is an interactive toolkit for building LLVM, Zig,");
+    println!("  and running Compiler Explorer with custom compiler builds.");
+
+    println!("\n{}", style("DIRECTORY LAYOUT").yellow().bold());
+    println!("  {}   {}", style("Home:").bold(), home.display());
+    println!("  {} {}", style("Builds:").bold(), bd.display());
+    println!("  {}     {}", style("CE:").bold(), ce.display());
+    println!("  {} {}", style("Config:").bold(), config_path().display());
+
+    println!("\n{}", style("ENVIRONMENT VARIABLES").yellow().bold());
+    println!("  {}  {}", style("LLVM_AIRFRYER_HOME").green(), style("(required)").dim());
+    println!("    Root directory for all airfryer data.");
+    println!("    Example: export LLVM_AIRFRYER_HOME=\"$HOME/.llvm_airfryer\"");
+
+    println!("\n  {}  {}", style("LLVM_AIRFRYER_BUILDS_PATH").green(), style("(optional)").dim());
+    println!("    Override where LLVM/Zig builds are stored.");
+    println!("    Useful for placing heavy builds on a separate disk.");
+    println!("    Default: $LLVM_AIRFRYER_HOME/builds");
+
+    println!("\n  {}  {}", style("LLVM_AIRFRYER_CE_PATH").green(), style("(optional)").dim());
+    println!("    Override where Compiler Explorer is cloned.");
+    println!("    Default: $LLVM_AIRFRYER_HOME/compiler-explorer");
+
+    println!("\n  {}  {}", style("LLVM_AIRFRYER_LLVM_SOURCE_PATH").green(), style("(optional)").dim());
+    println!("    Default path to the llvm-project source directory.");
+    println!("    Overrides the value saved in config.toml.");
+
+    println!("\n{}", style("CONFIG FILE").yellow().bold());
+    println!("  {}", config_path().display());
+    println!("  Stores persistent settings in TOML format:");
+    println!("    {} — remembered llvm-project path", style("llvm_source_path").green());
+
+    println!("\n{}", style("QUICK START").yellow().bold());
+    println!("  1. {} Compiler Explorer", style("Download").bold());
+    println!("  2. {} LLVM Upstream (main branch)", style("Build").bold());
+    println!("  3. {} Compiler Explorer — your custom clang appears automatically", style("Run").bold());
+    println!("  4. Use {} to compare assembly across targets", style("CE Flag Presets").bold());
+
+    println!("\n{}", style("KEYBOARD SHORTCUTS").yellow().bold());
+    println!("  {}  — navigate menus", style("↑/↓").bold());
+    println!("  {}  — type to fuzzy-search menu items", style("a-z").bold());
+    println!("  {} — go back / quit", style("Esc").bold());
+    println!();
+}
+
 fn pause_and_continue(home: &PathBuf) -> bool {
     println!();
     let choice = Select::with_theme(&ColorfulTheme::default())
@@ -770,7 +939,9 @@ fn pause_and_continue(home: &PathBuf) -> bool {
 
 fn print_header(home: &PathBuf) {
     println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit");
-    println!("   {}: {}\n", style("Home").dim(), style(home.display()).dim());
+    println!("   {}:   {}", style("Home").dim(), style(home.display()).dim());
+    println!("   {}:  {}", style("Builds").dim(), style(builds_dir().display()).dim());
+    println!("   {}:      {}\n", style("CE").dim(), style(ce_dir().display()).dim());
 }
 
 fn main() {
@@ -797,7 +968,8 @@ fn main() {
             3 => { build_llvm_branch(); }
             4 => { build_zig_custom_llvm(); }
             5 => { show_flag_presets(); }
-            6 => {
+            6 => { show_help(); }
+            7 => {
                 println!("Goodbye!");
                 break;
             }

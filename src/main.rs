@@ -1,5 +1,4 @@
 use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
-use serde::Deserialize;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
@@ -7,7 +6,6 @@ use std::process::Command;
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
 const ZIG_REPO: &str = "git@github.com:ziglang/zig.git";
 const CE_DEFAULT_PORT: u16 = 10240;
-const CONFIG_FILE: &str = "config.toml";
 
 const MENU_ITEMS: &[&str] = &[
     "Download Compiler Explorer",
@@ -17,23 +15,6 @@ const MENU_ITEMS: &[&str] = &[
     "Build Zig (Custom LLVM)",
     "Exit",
 ];
-
-#[derive(Deserialize, Default)]
-struct Config {
-    #[serde(default, rename = "llvm-path")]
-    llvm_path: Option<String>,
-}
-
-fn load_config() -> Config {
-    let config_path = project_root().join(CONFIG_FILE);
-    match std::fs::read_to_string(&config_path) {
-        Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("⚠ Failed to parse {CONFIG_FILE}: {e}");
-            Config::default()
-        }),
-        Err(_) => Config::default(),
-    }
-}
 
 fn project_root() -> PathBuf {
     let output = Command::new("cargo")
@@ -155,10 +136,10 @@ fn sanitize_branch_name(branch: &str) -> String {
 }
 
 fn prompt_llvm_dir() -> PathBuf {
-    let config = load_config();
+    let env_default = std::env::var("LLVM_AIRFRYER_LLVM_SOURCE_PATH").ok();
     let theme = ColorfulTheme::default();
 
-    let llvm_path: String = match config.llvm_path {
+    let llvm_path: String = match env_default {
         Some(ref default_path) => Input::with_theme(&theme)
             .with_prompt("Path to llvm-project directory")
             .default(default_path.clone())

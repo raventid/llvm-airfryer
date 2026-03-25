@@ -1,5 +1,6 @@
 use dialoguer::console::style;
 use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
+use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
@@ -18,21 +19,66 @@ const MENU_ITEMS: &[&str] = &[
     "Exit",
 ];
 
-fn project_root() -> PathBuf {
-    let output = Command::new("cargo")
-        .args(["locate-project", "--message-format=plain"])
-        .output()
-        .expect("failed to run `cargo locate-project`");
-    let cargo_toml = String::from_utf8(output.stdout)
-        .expect("invalid utf-8 from cargo locate-project");
-    PathBuf::from(cargo_toml.trim())
-        .parent()
-        .expect("Cargo.toml has no parent directory")
-        .to_path_buf()
+fn airfryer_home() -> PathBuf {
+    match std::env::var("LLVM_AIRFRYER_HOME") {
+        Ok(home) => PathBuf::from(shellexpand::tilde(&home).into_owned()),
+        Err(_) => {
+            eprintln!("{}: LLVM_AIRFRYER_HOME environment variable is not set.", style("Error").red().bold());
+            eprintln!();
+            eprintln!("This variable must point to the directory where llvm-airfryer stores");
+            eprintln!("its builds, Compiler Explorer, and configuration.");
+            eprintln!();
+            eprintln!("Add this to your shell config (~/.zshrc or ~/.bashrc):");
+            eprintln!();
+            eprintln!("  {}",
+                style("export LLVM_AIRFRYER_HOME=\"$HOME/.llvm_airfryer\"").green()
+            );
+            eprintln!();
+            eprintln!("Then restart your shell or run: {}", style("source ~/.zshrc").green());
+            std::process::exit(1);
+        }
+    }
+}
+
+fn builds_dir() -> PathBuf {
+    airfryer_home().join("builds")
+}
+
+fn ce_dir() -> PathBuf {
+    airfryer_home().join("compiler-explorer")
+}
+
+fn config_path() -> PathBuf {
+    airfryer_home().join("config.toml")
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Config {
+    #[serde(default)]
+    llvm_source_path: Option<String>,
+}
+
+impl Config {
+    fn load() -> Self {
+        let path = config_path();
+        if path.exists() {
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            toml::from_str(&contents).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    fn save(&self) {
+        let home = airfryer_home();
+        std::fs::create_dir_all(&home).expect("failed to create airfryer home directory");
+        let contents = toml::to_string_pretty(self).expect("failed to serialize config");
+        std::fs::write(config_path(), contents).expect("failed to write config.toml");
+    }
 }
 
 fn download_compiler_explorer() {
-    let dest = project_root().join("bin").join("compiler-explorer");
+    let dest = ce_dir();
 
     if dest.exists() {
         println!("Compiler Explorer already exists at {}", dest.display());
@@ -50,8 +96,8 @@ fn download_compiler_explorer() {
         return;
     }
 
-    let bin_dir = dest.parent().unwrap();
-    std::fs::create_dir_all(bin_dir).expect("failed to create bin/ directory");
+    let home = airfryer_home();
+    std::fs::create_dir_all(&home).expect("failed to create airfryer home directory");
 
     println!("Cloning Compiler Explorer into {}...", dest.display());
     let status = Command::new("git")
@@ -72,19 +118,19 @@ fn find_available_port(start: u16) -> Option<u16> {
 }
 
 fn run_compiler_explorer() {
-    let ce_dir = project_root().join("bin").join("compiler-explorer");
+    let ce_path = ce_dir();
 
-    if !ce_dir.exists() {
+    if !ce_path.exists() {
         eprintln!("Compiler Explorer not found. Please download it first.");
         std::process::exit(1);
     }
 
-    let node_modules = ce_dir.join("node_modules");
+    let node_modules = ce_path.join("node_modules");
     if !node_modules.exists() {
         println!("Installing npm dependencies (first run)...");
         let status = Command::new("npm")
             .arg("install")
-            .current_dir(&ce_dir)
+            .current_dir(&ce_path)
             .status()
             .expect("failed to run npm install");
         if !status.success() {
@@ -103,7 +149,7 @@ fn run_compiler_explorer() {
     let status = Command::new("make")
         .arg("dev")
         .env("EXTRA_ARGS", format!("--port {port}"))
-        .current_dir(&ce_dir)
+        .current_dir(&ce_path)
         .status()
         .expect("failed to start Compiler Explorer");
 
@@ -138,7 +184,10 @@ fn sanitize_branch_name(branch: &str) -> String {
 }
 
 fn prompt_llvm_dir() -> Option<PathBuf> {
-    let env_default = std::env::var("LLVM_AIRFRYER_LLVM_SOURCE_PATH").ok();
+    let config = Config::load();
+    let env_default = std::env::var("LLVM_AIRFRYER_LLVM_SOURCE_PATH")
+        .ok()
+        .or(config.llvm_source_path.clone());
     let theme = ColorfulTheme::default();
 
     let llvm_path: String = match env_default {
@@ -172,6 +221,11 @@ fn prompt_llvm_dir() -> Option<PathBuf> {
         );
         std::process::exit(1);
     }
+
+    // Persist the validated path to config
+    let mut config = Config::load();
+    config.llvm_source_path = Some(llvm_dir.display().to_string());
+    config.save();
 
     Some(llvm_dir)
 }
@@ -244,7 +298,7 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
 
 fn build_llvm_upstream() -> bool {
     let Some(llvm_dir) = prompt_llvm_dir() else { return false };
-    let install_dir = project_root().join("bin").join("llvm-upstream");
+    let install_dir = builds_dir().join("llvm-upstream");
 
     build_and_install_llvm(&llvm_dir, "main", &install_dir);
     regenerate_ce_config();
@@ -287,7 +341,7 @@ fn build_llvm_branch() -> bool {
     let branch = &branches[idx];
 
     let dir_name = format!("llvm-{}", sanitize_branch_name(branch));
-    let install_dir = project_root().join("bin").join(&dir_name);
+    let install_dir = builds_dir().join(&dir_name);
 
     build_and_install_llvm(&llvm_dir, branch, &install_dir);
     regenerate_ce_config();
@@ -298,8 +352,8 @@ fn build_llvm_branch() -> bool {
 }
 
 fn build_zig_custom_llvm() -> bool {
-    let bin_dir = project_root().join("bin");
-    let zig_src = bin_dir.join("zig-source");
+    let bd = builds_dir();
+    let zig_src = bd.join("zig-source");
 
     // Clone or update Zig source
     if zig_src.exists() {
@@ -307,7 +361,7 @@ fn build_zig_custom_llvm() -> bool {
         run_cmd("git", &["fetch", "--all"], &zig_src, "git fetch");
     } else {
         println!("Cloning Zig repository...");
-        std::fs::create_dir_all(&bin_dir).expect("failed to create bin/ directory");
+        std::fs::create_dir_all(&bd).expect("failed to create builds directory");
         let status = Command::new("git")
             .args(["clone", ZIG_REPO])
             .arg(&zig_src)
@@ -370,7 +424,7 @@ fn build_zig_custom_llvm() -> bool {
     let llvm_install_dir = llvm_exe.parent().unwrap().parent().unwrap();
 
     let zig_ref_sanitized = sanitize_branch_name(zig_ref);
-    let install_dir = bin_dir.join(format!("zig-{zig_ref_sanitized}-{llvm_id}"));
+    let install_dir = bd.join(format!("zig-{zig_ref_sanitized}-{llvm_id}"));
     let build_dir = zig_src.join(format!("build-airfryer-{llvm_id}"));
 
     std::fs::create_dir_all(&build_dir).expect("failed to create Zig build directory");
@@ -441,12 +495,12 @@ fn git_tags(repo_dir: &PathBuf) -> Vec<String> {
         .collect()
 }
 
-/// Discover all bin/llvm-* builds with clang++ binaries.
+/// Discover all builds/llvm-* builds with clang++ binaries.
 fn discover_llvm_builds() -> Vec<(String, PathBuf, String)> {
-    let bin_dir = project_root().join("bin");
+    let bd = builds_dir();
     let mut compilers: Vec<(String, PathBuf, String)> = Vec::new(); // (id, exe_path, display_name)
 
-    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+    if let Ok(entries) = std::fs::read_dir(&bd) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if !name.starts_with("llvm-") {
@@ -471,12 +525,12 @@ fn discover_llvm_builds() -> Vec<(String, PathBuf, String)> {
     compilers
 }
 
-/// Discover all bin/zig-* builds with zig binaries.
+/// Discover all builds/zig-* builds with zig binaries.
 fn discover_zig_builds() -> Vec<(String, PathBuf, String)> {
-    let bin_dir = project_root().join("bin");
+    let bd = builds_dir();
     let mut compilers: Vec<(String, PathBuf, String)> = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+    if let Ok(entries) = std::fs::read_dir(&bd) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if !name.starts_with("zig-") || name == "zig-source" {
@@ -497,11 +551,9 @@ fn discover_zig_builds() -> Vec<(String, PathBuf, String)> {
     compilers
 }
 
-/// Scan all bin/llvm-* and bin/zig-* directories and generate CE configs.
+/// Scan all builds/llvm-* and builds/zig-* directories and generate CE configs.
 fn regenerate_ce_config() {
-    let ce_config_dir = project_root()
-        .join("bin")
-        .join("compiler-explorer")
+    let ce_config_dir = ce_dir()
         .join("etc")
         .join("config");
 
@@ -516,7 +568,7 @@ fn regenerate_ce_config() {
     let zig_compilers = discover_zig_builds();
 
     if clang_compilers.is_empty() && zig_compilers.is_empty() {
-        println!("⚠ No custom builds found in bin/");
+        println!("⚠ No custom builds found in {}", builds_dir().display());
         return;
     }
 
@@ -672,7 +724,9 @@ fn show_flag_presets() -> bool {
 }
 
 fn main() {
-    println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit\n");
+    let home = airfryer_home();
+    println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit");
+    println!("   {}: {}\n", style("Home").dim(), style(home.display()).dim());
 
     loop {
         let selection = FuzzySelect::with_theme(&ColorfulTheme::default())

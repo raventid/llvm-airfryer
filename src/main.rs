@@ -1,3 +1,4 @@
+use dialoguer::console::style;
 use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -624,8 +625,26 @@ fn regenerate_ce_config() {
 }
 
 fn print_avx512_flags() {
-    println!("\nAVX-512 compilation flags for Compiler Explorer:\n");
-    println!("--target=x86_64-unknown-linux-gnu -O3 -S -mavx512f -mavx512vl -fno-exceptions -fno-rtti");
+    let flags = "--target=x86_64-unknown-linux-gnu -O3 -S -mavx512f -mavx512vl -fno-exceptions -fno-rtti";
+
+    println!("\n{}:\n", style("AVX-512 compilation flags for Compiler Explorer").cyan().bold());
+
+    let colored_parts: Vec<String> = flags.split_whitespace().map(|flag| {
+        if flag.starts_with("--") {
+            if let Some(eq) = flag.find('=') {
+                format!("{}{}", style(&flag[..=eq]).blue(), style(&flag[eq + 1..]).green())
+            } else {
+                format!("{}", style(flag).blue())
+            }
+        } else {
+            format!("{}", style(flag).magenta())
+        }
+    }).collect();
+    println!("{}", colored_parts.join("  "));
+
+    println!("\n{}",
+        style("(copy the line above and paste into the Compiler Explorer options field)").dim()
+    );
     println!();
 }
 

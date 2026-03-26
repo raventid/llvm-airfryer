@@ -117,15 +117,21 @@ main() {
     # Run the binary — first run auto-detects missing config and launches the
     # setup wizard. The wizard creates the home dir, config.toml, env file, and
     # shows the user shell config instructions.
-    # Its last stdout line is: LLVM_AIRFRYER_HOME=<path>
+    # It writes the chosen home path to a temp file for us to read.
     say "launching setup wizard..."
     printf '\n'
 
-    _wizard_output="${_tmpdir}/wizard_output.txt"
-    "${_tmpdir}/${BINARY_NAME}" 2>&1 | tee "$_wizard_output"
+    _marker="${TMPDIR:-/tmp}/llvm_airfryer_install_home"
+    rm -f "$_marker"
+
+    "${_tmpdir}/${BINARY_NAME}"
 
     # Read the home directory chosen by the wizard
-    _install_dir="$(grep '^LLVM_AIRFRYER_HOME=' "$_wizard_output" | tail -1 | cut -d= -f2-)"
+    if [ ! -f "$_marker" ]; then
+        err "could not determine home directory — wizard may not have completed"
+    fi
+    _install_dir="$(cat "$_marker")"
+    rm -f "$_marker"
 
     if [ -z "$_install_dir" ]; then
         err "could not determine home directory from wizard output"

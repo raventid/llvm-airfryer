@@ -143,15 +143,20 @@ fn run_setup_wizard() -> PathBuf {
     if choice == 0 {
         println!("\nRun {} again after updating your shell config. Goodbye!",
             style("llvm-airfryer").bold());
-        // Machine-readable last line for install.sh
-        println!("LLVM_AIRFRYER_HOME={}", home.display());
+        write_install_marker(&home);
         std::process::exit(0);
     }
 
     let _ = Term::stdout().clear_screen();
-    // Machine-readable last line for install.sh (harmless in interactive use)
-    println!("LLVM_AIRFRYER_HOME={}", home.display());
+    write_install_marker(&home);
     home
+}
+
+/// Write the chosen home path to a temp file so install.sh can find it.
+/// Harmless in interactive use — the file is ignored if no one reads it.
+fn write_install_marker(home: &PathBuf) {
+    let marker = std::env::temp_dir().join("llvm_airfryer_install_home");
+    let _ = std::fs::write(marker, home.display().to_string());
 }
 
 /// Write the env file that sets LLVM_AIRFRYER_HOME and adds bin/ to PATH.

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLVM Airfryer — Install</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --primary: #e94560;
+            --text: #eee;
+            --muted: #a0a0b8;
+            --code-bg: #0f3460;
+            --code-border: #e94560;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            text-align: center;
+            padding: 4rem 1rem 2rem;
+            max-width: 720px;
+        }
+
+        header h1 {
+            font-size: 2.8rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+        }
+
+        header h1 span { color: var(--primary); }
+
+        header p {
+            margin-top: 1rem;
+            font-size: 1.15rem;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .install-box {
+            background: var(--surface);
+            border: 1px solid var(--code-border);
+            border-radius: 12px;
+            padding: 2rem 2.5rem;
+            max-width: 680px;
+            width: 90%;
+            margin: 1.5rem 0;
+            text-align: center;
+        }
+
+        .install-box h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--muted);
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .code-block {
+            background: var(--code-bg);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
+            font-size: 0.95rem;
+            color: #fff;
+            word-break: break-all;
+            cursor: pointer;
+            position: relative;
+            transition: box-shadow 0.15s;
+        }
+
+        .code-block:hover {
+            box-shadow: 0 0 0 2px var(--primary);
+        }
+
+        .code-block .copy-hint {
+            position: absolute;
+            top: -1.8rem;
+            right: 0;
+            font-size: 0.75rem;
+            color: var(--muted);
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        .code-block:hover .copy-hint { opacity: 1; }
+
+        .copied-toast {
+            margin-top: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--primary);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .copied-toast.show { opacity: 1; }
+
+        .info {
+            max-width: 680px;
+            width: 90%;
+            padding: 1rem 0;
+        }
+
+        .info h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .info p, .info li {
+            color: var(--muted);
+            line-height: 1.7;
+            font-size: 0.95rem;
+        }
+
+        .info ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .info ul li::before {
+            content: "✓ ";
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        .info code {
+            background: var(--code-bg);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.88rem;
+        }
+
+        footer {
+            margin-top: auto;
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+
+        footer a { color: var(--primary); text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+
+        @media (max-width: 600px) {
+            header h1 { font-size: 2rem; }
+            .install-box { padding: 1.5rem 1rem; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>LLVM <span>Airfryer</span></h1>
+    <p>
+        An interactive CLI tool for managing LLVM builds and
+        <a href="https://godbolt.org" style="color:var(--primary)">Compiler Explorer</a>.
+        Build LLVM, Zig, and run your own local Compiler Explorer — all from one menu.
+    </p>
+</header>
+
+<div class="install-box">
+    <h2>Install LLVM Airfryer</h2>
+    <div class="code-block" onclick="copyCommand()" id="cmd">
+        <span class="copy-hint">click to copy</span>
+        curl --proto '=https' --tlsv1.2 -sSf https://raventid.github.io/llvm-airfryer/install.sh | sh
+    </div>
+    <div class="copied-toast" id="toast">Copied to clipboard!</div>
+</div>
+
+<div class="info">
+    <h3>What does this do?</h3>
+    <ul>
+        <li>Detects your OS and architecture (Linux &amp; macOS, x86_64 &amp; ARM64)</li>
+        <li>Downloads the latest release binary from GitHub</li>
+        <li>Installs to <code>$HOME/.llvm_airfryer/bin/llvm-airfryer</code></li>
+        <li>Creates an env file and updates your shell profile for PATH integration</li>
+    </ul>
+</div>
+
+<div class="info">
+    <h3>After installation</h3>
+    <p>Restart your terminal, or run:</p>
+    <p style="margin-top:0.5rem"><code>. "$HOME/.llvm_airfryer/env"</code></p>
+    <p style="margin-top:0.5rem">Then launch the tool:</p>
+    <p style="margin-top:0.5rem"><code>llvm-airfryer</code></p>
+</div>
+
+<div class="info">
+    <h3>Supported platforms</h3>
+    <ul>
+        <li>Linux x86_64 (GNU)</li>
+        <li>Linux ARM64 / aarch64 (GNU)</li>
+        <li>macOS x86_64 (Intel)</li>
+        <li>macOS ARM64 (Apple Silicon)</li>
+    </ul>
+</div>
+
+<footer>
+    <a href="https://github.com/raventid/llvm-airfryer">GitHub</a> ·
+    <a href="https://github.com/raventid/llvm-airfryer/releases">Releases</a> ·
+    MIT License
+</footer>
+
+<script>
+    function copyCommand() {
+        var text = 'curl --proto \'=https\' --tlsv1.2 -sSf https://raventid.github.io/llvm-airfryer/install.sh | sh';
+        var toast = document.getElementById('toast');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+                toast.textContent = 'Copied to clipboard!';
+                toast.classList.add('show');
+                setTimeout(function() { toast.classList.remove('show'); }, 1500);
+            });
+        } else {
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            toast.textContent = 'Copied to clipboard!';
+            toast.classList.add('show');
+            setTimeout(function() { toast.classList.remove('show'); }, 1500);
+        }
+    }
+</script>
+
+</body>
+</html>

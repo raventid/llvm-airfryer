@@ -110,7 +110,7 @@ fn run_setup_wizard() -> PathBuf {
     std::fs::create_dir_all(home.join("bin")).expect("failed to create bin directory");
     write_env_file(&home);
 
-    // 6. Show shell instructions and exit
+    // 6. Detect shell and offer to update config automatically
     println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
     println!();
     println!("  Home directory: {}", style(home.display()).bold());
@@ -118,25 +118,129 @@ fn run_setup_wizard() -> PathBuf {
         println!("  LLVM source:    {}", style(llvm).bold());
     }
     println!();
-    println!("{}", style("ACTION REQUIRED:").yellow().bold());
-    println!("  Add this line to your shell config to set up llvm-airfryer:\n");
 
     let source_line = format!(". \"{}\"", home.join("env").display());
-    println!("  {}\n", style(&source_line).green().bold());
+    let mut auto_updated = false;
 
-    println!("  This sets {} and adds the binary to your {}.",
-        style("LLVM_AIRFRYER_HOME").green(), style("PATH").green());
-    println!();
-    println!("  Add it to one of these files depending on your shell:");
-    println!("    {} — {}", style("zsh").bold(), style("~/.zshrc").dim());
-    println!("    {} — {}", style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim());
-    println!("    {} — {}", style("fish").bold(), style("~/.config/fish/config.fish").dim());
-    println!();
+    if let Some((shell_name, config_path)) = detect_shell_config() {
+        println!("  Detected your shell: {}", style(&shell_name).cyan().bold());
+        println!("  Config file: {}", style(&config_path).dim());
+        println!();
+        println!("  We can add this line to your config automatically:");
+        println!("  {}", style(&source_line).green().bold());
+        println!();
+
+        let choice = Select::with_theme(&theme)
+            .with_prompt(format!("Add to {}?", config_path))
+            .items(&["Yes", "No, I'll do it manually"])
+            .default(0)
+            .interact()
+            .unwrap_or(1);
+
+        if choice == 0 {
+            let path = PathBuf::from(shellexpand::tilde(&config_path).into_owned());
+            let mut contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if !contents.contains("llvm_airfryer/env") {
+                if !contents.is_empty() && !contents.ends_with('\n') {
+                    contents.push('\n');
+                }
+                contents.push_str(&format!("\n# llvm-airfryer\n{}\n", source_line));
+                std::fs::write(&path, contents).expect("failed to update shell config");
+                println!("\n  {} Updated {}", style("✔").green().bold(), style(&config_path).bold());
+                auto_updated = true;
+            } else {
+                println!("\n  {} Already configured in {}", style("✔").green(), config_path);
+                auto_updated = true;
+            }
+        }
+    }
+
+    if !auto_updated {
+        // Show the framed manual instructions
+        let border = "╔══════════════════════════════════════════════════════════════════╗";
+        let bottom = "╚══════════════════════════════════════════════════════════════════╝";
+        println!();
+        println!("  {}", style(border).yellow());
+        println!("  {}  {}{}",
+            style("║").yellow(),
+            style("ACTION REQUIRED:").yellow().bold(),
+            style("                                                ║").yellow());
+        println!("  {}  Add this line to your shell config:{}",
+            style("║").yellow(),
+            style("                          ║").yellow());
+        println!("  {}{}",
+            style("║").yellow(),
+            style("                                                                  ║").yellow());
+        println!("  {}    {}{}",
+            style("║").yellow(),
+            style(&source_line).green().bold(),
+            padding_to_border(&source_line, 62));
+        println!("  {}{}",
+            style("║").yellow(),
+            style("                                                                  ║").yellow());
+        println!("  {}  This sets {} and adds the binary to your {}.{}",
+            style("║").yellow(),
+            style("LLVM_AIRFRYER_HOME").green(),
+            style("PATH").green(),
+            style("    ║").yellow());
+        println!("  {}{}",
+            style("║").yellow(),
+            style("                                                                  ║").yellow());
+        println!("  {}  Add it to one of these files depending on your shell:{}",
+            style("║").yellow(),
+            style("         ║").yellow());
+        println!("  {}    {} — {}{}",
+            style("║").yellow(),
+            style("zsh").bold(), style("~/.zshrc").dim(),
+            style("                                              ║").yellow());
+        println!("  {}    {} — {}{}",
+            style("║").yellow(),
+            style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim(),
+            style("                          ║").yellow());
+        println!("  {}    {} — {}{}",
+            style("║").yellow(),
+            style("fish").bold(), style("~/.config/fish/config.fish").dim(),
+            style("                            ║").yellow());
+        println!("  {}", style(bottom).yellow());
+        println!();
+    }
+
     println!("Then run {} to get started.", style("llvm-airfryer").bold());
     println!();
 
     write_install_marker(&home);
     std::process::exit(0);
+}
+
+/// Detect the user's shell and return (shell_name, config_file_path).
+fn detect_shell_config() -> Option<(String, String)> {
+    let shell = std::env::var("SHELL").ok()?;
+    if shell.ends_with("/zsh") {
+        Some(("zsh".into(), "~/.zshrc".into()))
+    } else if shell.ends_with("/bash") {
+        let home = std::env::var("HOME").ok()?;
+        // Prefer .bashrc on Linux, .bash_profile on macOS
+        let profile = if PathBuf::from(&home).join(".bash_profile").exists() {
+            "~/.bash_profile"
+        } else {
+            "~/.bashrc"
+        };
+        Some(("bash".into(), profile.into()))
+    } else if shell.ends_with("/fish") {
+        Some(("fish".into(), "~/.config/fish/config.fish".into()))
+    } else {
+        None
+    }
+}
+
+/// Helper to produce padding for the framed box (cosmetic).
+fn padding_to_border(text: &str, width: usize) -> String {
+    let visible_len = text.len() + 4; // 4 for leading "    "
+    if visible_len < width {
+        format!("{}{}", " ".repeat(width - visible_len), style("║").yellow())
+    } else {
+        format!(" {}", style("║").yellow())
+    }
 }
 
 /// Write the chosen home path to a temp file so install.sh can find it.

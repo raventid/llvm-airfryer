@@ -116,8 +116,7 @@ fn run_setup_wizard() -> PathBuf {
     // 6. Detect shell and offer to update config automatically
     println!("\n{}", style("Step 3: Shell configuration").yellow().bold());
     println!("  llvm-airfryer needs your shell to load an {} file on startup.", style("env").green());
-    println!("  This sets {} and adds the binary to your {}.",
-        style("LLVM_AIRFRYER_HOME").green(), style("PATH").green());
+    println!("  This adds the binary to your {}.", style("PATH").green());
     println!();
 
     if let Some((shell_name, config_path)) = detect_shell_config() {
@@ -182,7 +181,7 @@ fn run_setup_wizard() -> PathBuf {
             ("", 'E'),
             (&source_padded, 'G'),
             ("", 'E'),
-            ("  This sets LLVM_AIRFRYER_HOME and adds the binary to PATH.", 'D'),
+            ("  This adds the llvm-airfryer binary to your PATH.", 'D'),
             ("", 'E'),
             ("  Depending on your shell, your config file might differ:", ' '),
             ("    zsh  — ~/.zshrc", 'D'),
@@ -260,15 +259,13 @@ fn write_install_marker(home: &PathBuf) {
     let _ = std::fs::write(marker, home.display().to_string());
 }
 
-/// Write the env file that sets LLVM_AIRFRYER_HOME and adds bin/ to PATH.
+/// Write the env file that adds bin/ to PATH.
 fn write_env_file(home: &PathBuf) {
     let env_file = home.join("env");
     let contents = format!(
         r#"#!/bin/sh
 # llvm-airfryer shell setup — source this file in your shell config
 # e.g.  . "{home}/env"
-
-export LLVM_AIRFRYER_HOME="{home}"
 
 case ":${{PATH}}:" in
     *:"{home}/bin":*)

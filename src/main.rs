@@ -189,7 +189,7 @@ fn run_setup_wizard() -> PathBuf {
             ("    bash — ~/.bashrc or ~/.bash_profile", 'D'),
             ("    fish — ~/.config/fish/config.fish", 'D'),
             ("", 'E'),
-            ("  Restart the shell or type this command again to make it active:", ' '),
+            ("  Restart the shell or type this command again to apply:", ' '),
             ("", 'E'),
             (&reload_line, 'G'),
             ("", 'E'),

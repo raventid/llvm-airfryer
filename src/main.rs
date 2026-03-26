@@ -157,51 +157,50 @@ fn run_setup_wizard() -> PathBuf {
 
     if !auto_updated {
         // Show the framed manual instructions
-        let border = "╔══════════════════════════════════════════════════════════════════╗";
-        let bottom = "╚══════════════════════════════════════════════════════════════════╝";
+        let w = 64; // inner width between ║ and ║
+        let top    = format!("╔{}╗", "═".repeat(w));
+        let bottom = format!("╚{}╝", "═".repeat(w));
+        let empty  = format!("║{}║", " ".repeat(w));
+
+        let source_padded = format!("    {}", source_line);
+        let lines: Vec<(&str, bool)> = vec![
+            ("", false),
+            ("  ACTION REQUIRED:", true),
+            ("", false),
+            ("  Add this line to your shell config:", false),
+            ("", false),
+            (&source_padded, false),
+            ("", false),
+            ("  This sets LLVM_AIRFRYER_HOME and adds the binary to PATH.", false),
+            ("", false),
+            ("  Add it to one of these files depending on your shell:", false),
+            ("    zsh  — ~/.zshrc", false),
+            ("    bash — ~/.bashrc or ~/.bash_profile", false),
+            ("    fish — ~/.config/fish/config.fish", false),
+            ("", false),
+        ];
+
         println!();
-        println!("  {}", style(border).yellow());
-        println!("  {}  {}{}",
-            style("║").yellow(),
-            style("ACTION REQUIRED:").yellow().bold(),
-            style("                                                ║").yellow());
-        println!("  {}  Add this line to your shell config:{}",
-            style("║").yellow(),
-            style("                          ║").yellow());
-        println!("  {}{}",
-            style("║").yellow(),
-            style("                                                                  ║").yellow());
-        println!("  {}    {}{}",
-            style("║").yellow(),
-            style(&source_line).green().bold(),
-            padding_to_border(&source_line, 62));
-        println!("  {}{}",
-            style("║").yellow(),
-            style("                                                                  ║").yellow());
-        println!("  {}  This sets {} and adds the binary to your {}.{}",
-            style("║").yellow(),
-            style("LLVM_AIRFRYER_HOME").green(),
-            style("PATH").green(),
-            style("    ║").yellow());
-        println!("  {}{}",
-            style("║").yellow(),
-            style("                                                                  ║").yellow());
-        println!("  {}  Add it to one of these files depending on your shell:{}",
-            style("║").yellow(),
-            style("         ║").yellow());
-        println!("  {}    {} — {}{}",
-            style("║").yellow(),
-            style("zsh").bold(), style("~/.zshrc").dim(),
-            style("                                              ║").yellow());
-        println!("  {}    {} — {}{}",
-            style("║").yellow(),
-            style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim(),
-            style("                          ║").yellow());
-        println!("  {}    {} — {}{}",
-            style("║").yellow(),
-            style("fish").bold(), style("~/.config/fish/config.fish").dim(),
-            style("                            ║").yellow());
-        println!("  {}", style(bottom).yellow());
+        println!("  {}", style(&top).yellow());
+        for (text, highlight) in &lines {
+            if text.is_empty() {
+                println!("  {}", style(&empty).yellow());
+            } else {
+                let padded = format!("{:<width$}", text, width = w);
+                if *highlight {
+                    println!("  {}{}{}",
+                        style("║").yellow(),
+                        style(&padded).yellow().bold(),
+                        style("║").yellow());
+                } else {
+                    println!("  {}{}{}",
+                        style("║").yellow(),
+                        padded,
+                        style("║").yellow());
+                }
+            }
+        }
+        println!("  {}", style(&bottom).yellow());
         println!();
     }
 
@@ -230,16 +229,6 @@ fn detect_shell_config() -> Option<(String, String)> {
         Some(("fish".into(), "~/.config/fish/config.fish".into()))
     } else {
         None
-    }
-}
-
-/// Helper to produce padding for the framed box (cosmetic).
-fn padding_to_border(text: &str, width: usize) -> String {
-    let visible_len = text.len() + 4; // 4 for leading "    "
-    if visible_len < width {
-        format!("{}{}", " ".repeat(width - visible_len), style("║").yellow())
-    } else {
-        format!(" {}", style("║").yellow())
     }
 }
 

@@ -2,8 +2,6 @@
 
 An interactive CLI tool for managing LLVM builds and [Compiler Explorer](https://godbolt.org).
 
-Build LLVM, Zig, and run your own local Compiler Explorer — all from one menu.
-
 ## Install
 
 ```sh
@@ -40,18 +38,6 @@ llvm-airfryer
 | Linux | aarch64     |
 | macOS | x86_64      |
 | macOS | aarch64     |
-
-## How the installer works
-
-The install script (`install.sh`):
-
-1. Detects your OS and CPU architecture
-2. Downloads the latest release binary from GitHub Releases
-3. Places the binary at `$HOME/.llvm_airfryer/bin/llvm-airfryer`
-4. Creates `$HOME/.llvm_airfryer/env` — a shell snippet that adds the binary to your `PATH`
-5. Appends `. "$HOME/.llvm_airfryer/env"` to your shell profile (`.bashrc`, `.zshrc`, etc.)
-
-This follows the same pattern as [rustup](https://rustup.rs): a single curl command bootstraps the tool by downloading the binary and integrating it into your shell environment.
 
 ## Development
 

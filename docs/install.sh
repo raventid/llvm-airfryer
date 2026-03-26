@@ -107,7 +107,21 @@ main() {
     _tmpfile="${_tmpdir}/${_archive}"
 
     say "downloading ${_archive}..."
-    download "$_url" "$_tmpfile"
+    if ! download "$_url" "$_tmpfile"; then
+        printf '\n'
+        say "Download failed. This can happen when a new release was just"
+        say "published and the binaries are still being built."
+        say ""
+        say "You can either:"
+        say "  • Try again in 15 minutes"
+        say "  • Check the releases page: https://github.com/${REPO}/releases"
+        say ""
+        say "If this keeps happening, please open an issue:"
+        say "  https://github.com/${REPO}/issues"
+        printf '\n'
+        rm -rf "$_tmpdir"
+        exit 1
+    fi
 
     say "extracting..."
     tar xzf "$_tmpfile" -C "$_tmpdir"

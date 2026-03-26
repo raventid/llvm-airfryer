@@ -157,47 +157,53 @@ fn run_setup_wizard() -> PathBuf {
 
     if !auto_updated {
         // Show the framed manual instructions
-        let w = 64; // inner width between ║ and ║
+        // Line styles: 'H' = heading (yellow bold), 'G' = green bold (command),
+        // 'D' = dim, ' ' = plain, 'E' = empty
+        let w: usize = 64;
         let top    = format!("╔{}╗", "═".repeat(w));
         let bottom = format!("╚{}╝", "═".repeat(w));
-        let empty  = format!("║{}║", " ".repeat(w));
+        let empty_line = format!("║{}║", " ".repeat(w));
 
         let source_padded = format!("    {}", source_line);
-        let lines: Vec<(&str, bool)> = vec![
-            ("", false),
-            ("  ACTION REQUIRED:", true),
-            ("", false),
-            ("  Add this line to your shell config:", false),
-            ("", false),
-            (&source_padded, false),
-            ("", false),
-            ("  This sets LLVM_AIRFRYER_HOME and adds the binary to PATH.", false),
-            ("", false),
-            ("  Add it to one of these files depending on your shell:", false),
-            ("    zsh  — ~/.zshrc", false),
-            ("    bash — ~/.bashrc or ~/.bash_profile", false),
-            ("    fish — ~/.config/fish/config.fish", false),
-            ("", false),
+        let reload_line = format!("    {}", source_line);
+        let lines: Vec<(&str, char)> = vec![
+            ("", 'E'),
+            ("  ACTION REQUIRED:", 'H'),
+            ("", 'E'),
+            ("  Add this line to your shell config:", ' '),
+            ("", 'E'),
+            (&source_padded, 'G'),
+            ("", 'E'),
+            ("  This sets LLVM_AIRFRYER_HOME and adds the binary to PATH.", 'D'),
+            ("", 'E'),
+            ("  Add it to one of these files depending on your shell:", ' '),
+            ("    zsh  — ~/.zshrc", 'D'),
+            ("    bash — ~/.bashrc or ~/.bash_profile", 'D'),
+            ("    fish — ~/.config/fish/config.fish", 'D'),
+            ("", 'E'),
+            ("  To apply right now without restarting your shell, run:", ' '),
+            ("", 'E'),
+            (&reload_line, 'G'),
+            ("", 'E'),
         ];
 
         println!();
         println!("  {}", style(&top).yellow());
-        for (text, highlight) in &lines {
-            if text.is_empty() {
-                println!("  {}", style(&empty).yellow());
+        for (text, kind) in &lines {
+            if *kind == 'E' {
+                println!("  {}", style(&empty_line).yellow());
             } else {
                 let padded = format!("{:<width$}", text, width = w);
-                if *highlight {
-                    println!("  {}{}{}",
-                        style("║").yellow(),
-                        style(&padded).yellow().bold(),
-                        style("║").yellow());
-                } else {
-                    println!("  {}{}{}",
-                        style("║").yellow(),
-                        padded,
-                        style("║").yellow());
-                }
+                let styled_content = match kind {
+                    'H' => style(padded).yellow().bold().to_string(),
+                    'G' => style(padded).green().bold().to_string(),
+                    'D' => style(padded).dim().to_string(),
+                    _   => padded,
+                };
+                println!("  {}{}{}",
+                    style("║").yellow(),
+                    styled_content,
+                    style("║").yellow());
             }
         }
         println!("  {}", style(&bottom).yellow());

@@ -222,8 +222,59 @@ fn download_compiler_explorer() -> bool {
         return false;
     }
     println!("\n{} Compiler Explorer downloaded successfully!", style("✔").green().bold());
+    println!("  Applying LLVM Airfryer branding...");
+    patch_compiler_explorer();
     println!("  You can now run it from the main menu.");
     true
+}
+
+fn patch_compiler_explorer() {
+    let ce_path = ce_dir();
+
+    // 1. Create custom logo overlay SVG
+    let logo_svg = r##"<svg viewBox="0 0 165 50" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(50,48)rotate(-25)" font-weight="bold" font-family="sans-serif" font-size="14">
+    <text textLength="120" lengthAdjust="spacingAndGlyphs">AIRFRYER</text>
+    <text textLength="120" lengthAdjust="spacingAndGlyphs" fill="#e85d04" dx="-1" dy="-1">AIRFRYER</text>
+  </g>
+</svg>"##;
+
+    let public_dir = ce_path.join("public");
+    std::fs::write(public_dir.join("site-logo-airfryer.svg"), logo_svg)
+        .expect("failed to write airfryer logo SVG");
+
+    // 2. Patch logo.pug to add airfryer branch
+    let logo_pug_path = ce_path.join("views").join("logo.pug");
+    if let Ok(content) = std::fs::read_to_string(&logo_pug_path) {
+        if !content.contains("airfryer") {
+            let patched = content.replace(
+                r#"else if extraBodyClass === "dev""#,
+                "else if extraBodyClass === \"airfryer\"\n    img(src=staticRoot + \"site-logo-airfryer.svg\" alt=\"LLVM Airfryer\" height=\"50\" width=\"165\" style=\"position: absolute; top: 0; right: 0;\")\n  else if extraBodyClass === \"dev\"",
+            );
+            std::fs::write(&logo_pug_path, patched)
+                .expect("failed to patch logo.pug");
+        }
+    }
+
+    // 3. Set extraBodyClass=airfryer in local config
+    let config_dir = ce_path.join("etc").join("config");
+    std::fs::create_dir_all(&config_dir).ok();
+    let local_props = config_dir.join("compiler-explorer.local.properties");
+    let mut props = if local_props.exists() {
+        std::fs::read_to_string(&local_props).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if !props.contains("extraBodyClass") {
+        if !props.is_empty() && !props.ends_with('\n') {
+            props.push('\n');
+        }
+        props.push_str("extraBodyClass=airfryer\n");
+        std::fs::write(&local_props, props)
+            .expect("failed to write compiler-explorer.local.properties");
+    }
+
+    println!("  {} Branding applied.", style("✔").green());
 }
 
 fn find_available_port(start: u16) -> Option<u16> {
@@ -263,7 +314,7 @@ fn run_compiler_explorer() -> bool {
     println!("Starting Compiler Explorer on http://localhost:{port} ...");
 
     let status = Command::new("make")
-        .arg("dev")
+        .arg("run")
         .env("EXTRA_ARGS", format!("--port {port}"))
         .current_dir(&ce_path)
         .status()

@@ -2,16 +2,15 @@
 # LLVM Airfryer installer script
 # Usage: curl --proto '=https' --tlsv1.2 -sSf https://raventid.github.io/llvm-airfryer/install.sh | sh
 #
-# This script downloads the latest llvm-airfryer release binary,
-# installs it to $HOME/.llvm_airfryer/bin, creates an env script
-# for PATH integration, and updates your shell profile.
+# This script:
+#   1. Downloads the latest llvm-airfryer release binary to a temp dir
+#   2. Runs it — the built-in wizard handles all configuration
+#   3. Reads the home directory from the wizard output
+#   4. Moves the binary into <home>/bin/
 
 set -eu
 
 REPO="raventid/llvm-airfryer"
-INSTALL_DIR="$HOME/.llvm_airfryer"
-BIN_DIR="$INSTALL_DIR/bin"
-ENV_FILE="$INSTALL_DIR/env"
 BINARY_NAME="llvm-airfryer"
 
 # --- Helpers ---
@@ -81,40 +80,6 @@ download() {
     fi
 }
 
-# --- Create env file ---
-
-create_env_file() {
-    cat > "$ENV_FILE" << 'ENVEOF'
-#!/bin/sh
-# llvm-airfryer shell setup
-# Sourcing this file adds llvm-airfryer to your PATH.
-# e.g.  . "$HOME/.llvm_airfryer/env"
-
-case ":${PATH}:" in
-    *:"$HOME/.llvm_airfryer/bin":*)
-        ;;
-    *)
-        export PATH="$HOME/.llvm_airfryer/bin:$PATH"
-        ;;
-esac
-ENVEOF
-}
-
-# --- Update shell profiles ---
-
-update_shell_profile() {
-    _source_line=". \"$INSTALL_DIR/env\""
-
-    for _profile in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.profile"; do
-        if [ -f "$_profile" ]; then
-            if ! grep -qF ".llvm_airfryer/env" "$_profile" 2>/dev/null; then
-                printf '\n# llvm-airfryer\n%s\n' "$_source_line" >> "$_profile"
-                say "updated $_profile"
-            fi
-        fi
-    done
-}
-
 # --- Main ---
 
 main() {
@@ -144,29 +109,38 @@ main() {
     say "downloading ${_archive}..."
     download "$_url" "$_tmpfile"
 
-    say "installing to ${BIN_DIR}..."
-    mkdir -p "$BIN_DIR"
-    tar xzf "$_tmpfile" -C "$BIN_DIR"
-    chmod +x "${BIN_DIR}/${BINARY_NAME}"
+    say "extracting..."
+    tar xzf "$_tmpfile" -C "$_tmpdir"
+    chmod +x "${_tmpdir}/${BINARY_NAME}"
+    rm -f "$_tmpfile"
+
+    # Run the binary — first run auto-detects missing config and launches the
+    # setup wizard. The wizard creates the home dir, config.toml, env file, and
+    # shows the user shell config instructions.
+    # Its last stdout line is: LLVM_AIRFRYER_HOME=<path>
+    say "launching setup wizard..."
+    printf '\n'
+
+    _wizard_output="${_tmpdir}/wizard_output.txt"
+    "${_tmpdir}/${BINARY_NAME}" 2>&1 | tee "$_wizard_output"
+
+    # Read the home directory chosen by the wizard
+    _install_dir="$(grep '^LLVM_AIRFRYER_HOME=' "$_wizard_output" | tail -1 | cut -d= -f2-)"
+
+    if [ -z "$_install_dir" ]; then
+        err "could not determine home directory from wizard output"
+    fi
+
+    _bin_dir="${_install_dir}/bin"
+
+    say "moving binary to ${_bin_dir}..."
+    mkdir -p "$_bin_dir"
+    mv "${_tmpdir}/${BINARY_NAME}" "${_bin_dir}/${BINARY_NAME}"
 
     rm -rf "$_tmpdir"
 
-    say "creating env file..."
-    create_env_file
-
-    say "updating shell profiles..."
-    update_shell_profile
-
     printf '\n'
     say "llvm-airfryer installed successfully!"
-    printf '\n'
-    say "To get started, either restart your shell or run:"
-    printf '\n'
-    say "  . \"$INSTALL_DIR/env\""
-    printf '\n'
-    say "Then run:"
-    printf '\n'
-    say "  llvm-airfryer"
     printf '\n'
 }
 

@@ -106,7 +106,11 @@ fn run_setup_wizard() -> PathBuf {
     // Safe here: single-threaded at startup, no other threads reading env
     unsafe { std::env::set_var("LLVM_AIRFRYER_HOME", &home); }
 
-    // 5. Show shell instructions
+    // 5. Create env file and bin directory
+    std::fs::create_dir_all(home.join("bin")).expect("failed to create bin directory");
+    write_env_file(&home);
+
+    // 6. Show shell instructions
     println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
     println!();
     println!("  Home directory: {}", style(home.display()).bold());
@@ -115,16 +119,18 @@ fn run_setup_wizard() -> PathBuf {
     }
     println!();
     println!("{}", style("ACTION REQUIRED:").yellow().bold());
-    println!("  Add this line to your shell config so llvm-airfryer finds its data next time:\n");
+    println!("  Add this line to your shell config to set up llvm-airfryer:\n");
 
-    let export_line = format!("export LLVM_AIRFRYER_HOME=\"{}\"", home.display());
-    println!("  {}\n", style(&export_line).green().bold());
+    let source_line = format!(". \"{}\"", home.join("env").display());
+    println!("  {}\n", style(&source_line).green().bold());
 
+    println!("  This sets {} and adds the binary to your {}.",
+        style("LLVM_AIRFRYER_HOME").green(), style("PATH").green());
+    println!();
     println!("  Add it to one of these files depending on your shell:");
     println!("    {} — {}", style("zsh").bold(), style("~/.zshrc").dim());
     println!("    {} — {}", style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim());
     println!("    {} — {}", style("fish").bold(), style("~/.config/fish/config.fish").dim());
-    println!("           use: {}", style(format!("set -Ux LLVM_AIRFRYER_HOME \"{}\"", home.display())).dim());
     println!();
 
     let choice = Select::with_theme(&theme)
@@ -135,12 +141,40 @@ fn run_setup_wizard() -> PathBuf {
         .unwrap_or(0);
 
     if choice == 0 {
-        println!("\nRun llvm-airfryer again after updating your shell config. Goodbye!");
+        println!("\nRun {} again after updating your shell config. Goodbye!",
+            style("llvm-airfryer").bold());
+        // Machine-readable last line for install.sh
+        println!("LLVM_AIRFRYER_HOME={}", home.display());
         std::process::exit(0);
     }
 
     let _ = Term::stdout().clear_screen();
+    // Machine-readable last line for install.sh (harmless in interactive use)
+    println!("LLVM_AIRFRYER_HOME={}", home.display());
     home
+}
+
+/// Write the env file that sets LLVM_AIRFRYER_HOME and adds bin/ to PATH.
+fn write_env_file(home: &PathBuf) {
+    let env_file = home.join("env");
+    let contents = format!(
+        r#"#!/bin/sh
+# llvm-airfryer shell setup — source this file in your shell config
+# e.g.  . "{home}/env"
+
+export LLVM_AIRFRYER_HOME="{home}"
+
+case ":${{PATH}}:" in
+    *:"{home}/bin":*)
+        ;;
+    *)
+        export PATH="{home}/bin:$PATH"
+        ;;
+esac
+"#,
+        home = home.display()
+    );
+    std::fs::write(&env_file, contents).expect("failed to write env file");
 }
 
 fn builds_dir() -> PathBuf {

@@ -23,7 +23,7 @@ jobs:
       - name: Get current version from Cargo.toml
         id: version
         run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Current version: $VERSION"
 
@@ -70,7 +70,9 @@ jobs:
         if: steps.check.outputs.new_version == 'true'
         run: |
           TAG="v${{ steps.version.outputs.version }}"
-          git tag "$TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
       - name: Create GitHub Release
@@ -86,4 +88,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          sleep 2
           gh workflow run release.yml --ref "v${{ steps.version.outputs.version }}"

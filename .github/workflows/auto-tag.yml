@@ -1,0 +1,89 @@
+name: Auto Tag and Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check-and-release:
+    name: Check Version and Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Current version: $VERSION"
+
+      - name: Check if tag already exists
+        id: check
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "new_version=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists, skipping release"
+          else
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG does not exist — new version detected"
+          fi
+
+      - name: Get previous tag
+        if: steps.check.outputs.new_version == 'true'
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "Previous tag: ${PREV_TAG:-none}"
+
+      - name: Generate release notes from commits
+        if: steps.check.outputs.new_version == 'true'
+        run: |
+          PREV_TAG="${{ steps.prev_tag.outputs.tag }}"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Collecting commits since $PREV_TAG..."
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
+          else
+            echo "No previous tag found, collecting all commits..."
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          fi
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS"
+          } > release_notes.md
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Create and push tag
+        if: steps.check.outputs.new_version == 'true'
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.new_version == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version.outputs.version }}"
+          name: "v${{ steps.version.outputs.version }}"
+          body_path: release_notes.md
+
+      - name: Trigger release build
+        if: steps.check.outputs.new_version == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml --ref "v${{ steps.version.outputs.version }}"

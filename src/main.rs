@@ -110,7 +110,7 @@ fn run_setup_wizard() -> PathBuf {
     std::fs::create_dir_all(home.join("bin")).expect("failed to create bin directory");
     write_env_file(&home);
 
-    // 6. Show shell instructions
+    // 6. Show shell instructions and exit
     println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
     println!();
     println!("  Home directory: {}", style(home.display()).bold());
@@ -132,24 +132,11 @@ fn run_setup_wizard() -> PathBuf {
     println!("    {} — {}", style("bash").bold(), style("~/.bashrc or ~/.bash_profile").dim());
     println!("    {} — {}", style("fish").bold(), style("~/.config/fish/config.fish").dim());
     println!();
+    println!("Then run {} to get started.", style("llvm-airfryer").bold());
+    println!();
 
-    let choice = Select::with_theme(&theme)
-        .with_prompt("What would you like to do?")
-        .items(&["Exit and update my shell config first", "Continue to main menu"])
-        .default(0)
-        .interact()
-        .unwrap_or(0);
-
-    if choice == 0 {
-        println!("\nRun {} again after updating your shell config. Goodbye!",
-            style("llvm-airfryer").bold());
-        write_install_marker(&home);
-        std::process::exit(0);
-    }
-
-    let _ = Term::stdout().clear_screen();
     write_install_marker(&home);
-    home
+    std::process::exit(0);
 }
 
 /// Write the chosen home path to a temp file so install.sh can find it.
@@ -1028,7 +1015,9 @@ fn pause_and_continue(home: &PathBuf) -> bool {
 }
 
 fn print_header(home: &PathBuf) {
-    println!("🔥 LLVM Airfryer — LLVM compiler framework development toolkit");
+    let version = env!("CARGO_PKG_VERSION");
+    println!("🔥 LLVM Airfryer {} — LLVM compiler framework development toolkit",
+        style(format!("(v{version})")).dim());
     println!("   {}:   {}", style("Home").dim(), style(home.display()).dim());
     println!("   {}:  {}", style("Builds").dim(), style(builds_dir().display()).dim());
     println!("   {}:      {}\n", style("CE").dim(), style(ce_dir().display()).dim());

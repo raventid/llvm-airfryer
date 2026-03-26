@@ -110,29 +110,25 @@ fn run_setup_wizard() -> PathBuf {
     std::fs::create_dir_all(home.join("bin")).expect("failed to create bin directory");
     write_env_file(&home);
 
-    // 6. Detect shell and offer to update config automatically
-    println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
-    println!();
-    println!("  Home directory: {}", style(home.display()).bold());
-    if let Some(ref llvm) = config.llvm_source_path {
-        println!("  LLVM source:    {}", style(llvm).bold());
-    }
-    println!();
-
     let source_line = format!(". \"{}\"", home.join("env").display());
     let mut auto_updated = false;
 
+    // 6. Detect shell and offer to update config automatically
+    println!("\n{}", style("Step 3: Shell configuration").yellow().bold());
+    println!("  llvm-airfryer needs your shell to load an {} file on startup.", style("env").green());
+    println!("  This sets {} and adds the binary to your {}.",
+        style("LLVM_AIRFRYER_HOME").green(), style("PATH").green());
+    println!();
+
     if let Some((shell_name, config_path)) = detect_shell_config() {
         println!("  Detected your shell: {}", style(&shell_name).cyan().bold());
-        println!("  Config file: {}", style(&config_path).dim());
-        println!();
-        println!("  We can add this line to your config automatically:");
+        println!("  We can add this line to {} automatically:", style(&config_path).bold());
         println!("  {}", style(&source_line).green().bold());
         println!();
 
         let choice = Select::with_theme(&theme)
             .with_prompt(format!("Add to {}?", config_path))
-            .items(&["Yes", "No, I'll do it manually"])
+            .items(&["Yes, update my shell config", "No, I'll do it manually"])
             .default(0)
             .interact()
             .unwrap_or(1);
@@ -155,6 +151,18 @@ fn run_setup_wizard() -> PathBuf {
         }
     }
 
+    // 7. Show completion message
+    println!("\n{}", style("═══ Setup Complete! ═══").green().bold());
+    println!();
+    println!("  Home directory: {}", style(home.display()).bold());
+    if let Some(ref llvm) = config.llvm_source_path {
+        println!("  LLVM source:    {}", style(llvm).bold());
+    }
+    if auto_updated {
+        println!("  Shell config:   {} updated automatically", style("✔").green());
+    }
+    println!();
+
     if !auto_updated {
         // Show the framed manual instructions
         // Line styles: 'H' = heading (yellow bold), 'G' = green bold (command),
@@ -176,18 +184,17 @@ fn run_setup_wizard() -> PathBuf {
             ("", 'E'),
             ("  This sets LLVM_AIRFRYER_HOME and adds the binary to PATH.", 'D'),
             ("", 'E'),
-            ("  Add it to one of these files depending on your shell:", ' '),
+            ("  Depending on your shell, your config file might differ:", ' '),
             ("    zsh  — ~/.zshrc", 'D'),
             ("    bash — ~/.bashrc or ~/.bash_profile", 'D'),
             ("    fish — ~/.config/fish/config.fish", 'D'),
             ("", 'E'),
-            ("  To apply right now without restarting your shell, run:", ' '),
+            ("  Restart the shell or type this command again to make it active:", ' '),
             ("", 'E'),
             (&reload_line, 'G'),
             ("", 'E'),
         ];
 
-        println!();
         println!("  {}", style(&top).yellow());
         for (text, kind) in &lines {
             if *kind == 'E' {
@@ -210,7 +217,12 @@ fn run_setup_wizard() -> PathBuf {
         println!();
     }
 
-    println!("Then run {} to get started.", style("llvm-airfryer").bold());
+    if auto_updated {
+        println!("Restart your shell or run {} to apply, then run {} to get started.",
+            style(&source_line).green(), style("llvm-airfryer").bold());
+    } else {
+        println!("Then run {} to get started.", style("llvm-airfryer").bold());
+    }
     println!();
 
     write_install_marker(&home);

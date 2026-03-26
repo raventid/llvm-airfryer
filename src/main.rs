@@ -218,8 +218,11 @@ fn run_setup_wizard() -> PathBuf {
     }
 
     if auto_updated {
-        println!("Restart your shell or run {} to apply, then run {} to get started.",
-            style(&source_line).green(), style("llvm-airfryer").bold());
+        println!("Restart your shell and run {} to get started.",
+            style("llvm-airfryer").bold());
+        println!();
+        println!("Or to activate right now, paste this into your current shell:");
+        println!("  {}", style(&source_line).green().bold());
     } else {
         println!("Then run {} to get started.", style("llvm-airfryer").bold());
     }

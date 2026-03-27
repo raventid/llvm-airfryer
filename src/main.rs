@@ -898,6 +898,91 @@ fn build_zig_custom_llvm() -> bool {
     let (llvm_id, llvm_exe, _) = &llvm_builds[llvm_idx];
     let llvm_install_dir = llvm_exe.parent().unwrap().parent().unwrap();
 
+    // Detect LLVM version and check compatibility with Zig
+    let llvm_config = llvm_install_dir.join("bin").join("llvm-config");
+    if llvm_config.exists() {
+        if let Ok(output) = Command::new(&llvm_config).arg("--version").output() {
+            let llvm_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let llvm_major = llvm_version.split('.').next().unwrap_or("?");
+
+            let findllvm_path = zig_src.join("cmake").join("Findllvm.cmake");
+            if findllvm_path.exists() {
+                if let Ok(findllvm) = std::fs::read_to_string(&findllvm_path) {
+                    // Look for the expected version pattern, e.g. "expected LLVM 21"
+                    let expected_major = findllvm.lines()
+                        .find(|l| l.contains("expected LLVM"))
+                        .and_then(|l| {
+                            l.split("expected LLVM ")
+                                .nth(1)
+                                .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+                        });
+
+                    if let Some(expected) = expected_major {
+                        if expected != llvm_major {
+                            let version_gap: i32 = llvm_major.parse::<i32>().unwrap_or(0)
+                                - expected.parse::<i32>().unwrap_or(0);
+                            let big_gap = version_gap.abs() > 1;
+
+                            println!("\n  {} Zig expects LLVM {} but your build is LLVM {}",
+                                style("⚠").yellow().bold(), style(expected).bold(), style(&llvm_version).bold());
+
+                            if big_gap {
+                                println!("    {} LLVM APIs change across major versions — build will likely fail",
+                                    style("Major version gap!").red().bold());
+                                println!("    even with the cmake patch due to C++ API incompatibilities.");
+                                println!("    Consider building LLVM {} for Zig, or wait for Zig to support LLVM {}.\n",
+                                    expected, llvm_major);
+                            } else {
+                                println!("    Minor version gap — patching cmake will likely work.\n");
+                            }
+
+                            let choice = Select::with_theme(&ColorfulTheme::default())
+                                .with_prompt("How to proceed?")
+                                .items(&[
+                                    "Patch Zig cmake to skip version check",
+                                    "Continue anyway (will likely fail)",
+                                    "Abort",
+                                ])
+                                .default(if big_gap { 2 } else { 0 })
+                                .interact_opt()
+                                .expect("failed to render choice");
+
+                            match choice {
+                                Some(0) => {
+                                    // Patch Findllvm.cmake to skip the version range check.
+                                    // The check is a VERSION_LESS/VERSION_GREATER if-block
+                                    // that adds to an ignore list and continues the loop.
+                                    let mut skip_until_endif = false;
+                                    let patched = findllvm.lines().map(|line| {
+                                        if line.contains("VERSION_LESS") && line.contains("VERSION_GREATER") {
+                                            skip_until_endif = true;
+                                            format!("    # Patched by llvm-airfryer to accept any LLVM version")
+                                        } else if skip_until_endif {
+                                            if line.trim_start().starts_with("endif()") {
+                                                skip_until_endif = false;
+                                            }
+                                            format!("    # {}", line.trim())
+                                        } else {
+                                            line.to_string()
+                                        }
+                                    }).collect::<Vec<_>>().join("\n");
+                                    std::fs::write(&findllvm_path, patched)
+                                        .expect("failed to patch Findllvm.cmake");
+                                    println!("  {} Patched Zig cmake to accept LLVM {}",
+                                        style("✔").green().bold(), &llvm_version);
+                                }
+                                Some(1) => {
+                                    println!("  Continuing without patching...");
+                                }
+                                _ => return false,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let zig_ref_sanitized = sanitize_branch_name(zig_ref);
     let install_dir = bd.join(format!("zig-{zig_ref_sanitized}-{llvm_id}"));
     let build_dir = zig_src.join(format!("build-airfryer-{llvm_id}"));

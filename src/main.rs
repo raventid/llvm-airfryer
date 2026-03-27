@@ -5,6 +5,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod resources;
+
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
 const ZIG_REPO: &str = "git@github.com:ziglang/zig.git";
 const CE_DEFAULT_PORT: u16 = 10240;
@@ -17,6 +19,7 @@ const MENU_ITEMS: &[&str] = &[
     "Build LLVM Branch",
     "Build Zig (Custom LLVM)",
     "CE Flag Presets",
+    "Interesting Resources",
     "Help & Configuration",
     "Exit",
 ];
@@ -1304,8 +1307,9 @@ fn main() {
             4 => { build_llvm_branch(); }
             5 => { build_zig_custom_llvm(); }
             6 => { show_flag_presets(); }
-            7 => { show_help(); }
-            8 => {
+            7 => { resources::show_resources(); }
+            8 => { show_help(); }
+            9 => {
                 println!("Goodbye!");
                 break;
             }

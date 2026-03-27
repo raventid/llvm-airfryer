@@ -12,6 +12,7 @@ const CE_DEFAULT_PORT: u16 = 10240;
 const MENU_ITEMS: &[&str] = &[
     "Download Compiler Explorer",
     "Run Compiler Explorer",
+    "Stop Compiler Explorer",
     "Build LLVM Upstream",
     "Build LLVM Branch",
     "Build Zig (Custom LLVM)",
@@ -419,11 +420,33 @@ fn find_available_port(start: u16) -> Option<u16> {
 }
 
 fn run_compiler_explorer() -> bool {
+    let home = airfryer_home();
     let ce_path = ce_dir();
 
     if !ce_path.exists() {
         eprintln!("Compiler Explorer not found. Please download it first.");
         return false;
+    }
+
+    // Check if CE is already running
+    let pid_file = home.join("ce.pid");
+    if pid_file.exists() {
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                let alive = Command::new("kill")
+                    .args(["-0", &pid.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if alive {
+                    println!("{} Compiler Explorer is already running (PID {}).",
+                        style("ℹ").cyan(), style(pid).bold());
+                    return true;
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&pid_file);
     }
 
     let node_modules = ce_path.join("node_modules");
@@ -448,20 +471,86 @@ fn run_compiler_explorer() -> bool {
         }
     };
 
-    println!("Starting Compiler Explorer on http://localhost:{port} ...");
+    println!("Building and starting Compiler Explorer on port {}...", style(port).bold());
 
-    let status = Command::new("make")
+    let log_file_path = home.join("ce.log");
+    let log_file = std::fs::File::create(&log_file_path)
+        .expect("failed to create ce.log");
+    let log_stderr = log_file.try_clone().expect("failed to clone log file handle");
+
+    let child = Command::new("make")
         .arg("run")
         .env("EXTRA_ARGS", format!("--port {port}"))
         .current_dir(&ce_path)
-        .status()
-        .expect("failed to start Compiler Explorer");
+        .stdout(log_file)
+        .stderr(log_stderr)
+        .spawn();
 
-    if !status.success() {
-        eprintln!("Compiler Explorer exited with an error");
-        return false;
+    let child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to start Compiler Explorer: {e}");
+            return false;
+        }
+    };
+
+    let pid = child.id();
+    std::fs::write(&pid_file, pid.to_string()).expect("failed to write ce.pid");
+
+    // Tail the log file waiting for "Listening on" or an error
+    use std::io::{BufRead, BufReader};
+    let timeout = std::time::Duration::from_secs(120);
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(300);
+
+    let mut reader = BufReader::new(
+        std::fs::File::open(&log_file_path).expect("failed to open ce.log for reading")
+    );
+
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                // No new data yet — check timeout and whether process is still alive
+                if start.elapsed() > timeout {
+                    eprintln!("Timed out waiting for Compiler Explorer to start.");
+                    eprintln!("Check logs at: {}", log_file_path.display());
+                    return false;
+                }
+                // Check process is still running
+                let alive = Command::new("kill")
+                    .args(["-0", &pid.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if !alive {
+                    eprintln!("Compiler Explorer process exited unexpectedly.");
+                    eprintln!("Check logs at: {}", log_file_path.display());
+                    let _ = std::fs::remove_file(&pid_file);
+                    return false;
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Ok(_) => {
+                // Show startup logs so user can see progress
+                print!("  {}", style(&line).dim());
+                if line.contains("Listening on") {
+                    println!();
+                    println!("  {} Compiler Explorer started on {} (PID {})",
+                        style("✔").green().bold(),
+                        style(format!("http://localhost:{port}")).cyan().underlined(),
+                        style(pid).bold());
+                    println!("  Logs: {}", style(log_file_path.display()).dim());
+                    return true;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading log: {e}");
+                return false;
+            }
+        }
     }
-    true
 }
 
 fn run_cmd(cmd: &str, args: &[&str], dir: &PathBuf, context: &str) -> bool {
@@ -476,6 +565,62 @@ fn run_cmd(cmd: &str, args: &[&str], dir: &PathBuf, context: &str) -> bool {
         eprintln!("{context} failed");
         return false;
     }
+    true
+}
+
+fn stop_compiler_explorer() -> bool {
+    let home = airfryer_home();
+    let pid_file = home.join("ce.pid");
+
+    let pid_str = match std::fs::read_to_string(&pid_file) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("{} Compiler Explorer is not running (no PID file found).",
+                style("ℹ").cyan());
+            return true;
+        }
+    };
+
+    let pid: i32 = match pid_str.trim().parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Invalid PID in ce.pid, removing stale file.");
+            let _ = std::fs::remove_file(&pid_file);
+            return false;
+        }
+    };
+
+    // Check if process is alive
+    let check = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    if !check.is_ok_and(|s| s.success()) {
+        println!("{} Compiler Explorer is not running (stale PID {}).",
+            style("ℹ").cyan(), pid);
+        let _ = std::fs::remove_file(&pid_file);
+        return true;
+    }
+
+    // Send SIGTERM to the process directly
+    println!("Stopping Compiler Explorer (PID {})...", style(pid).bold());
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    // Also try to kill the process group (may fail silently if not a group leader)
+    let _ = Command::new("kill")
+        .args(["-TERM", &format!("-{}", pid)])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let _ = std::fs::remove_file(&pid_file);
+    println!("{} Compiler Explorer stopped.", style("✔").green().bold());
     true
 }
 
@@ -1154,12 +1299,13 @@ fn main() {
         match idx {
             0 => { download_compiler_explorer(); }
             1 => { run_compiler_explorer(); }
-            2 => { build_llvm_upstream(); }
-            3 => { build_llvm_branch(); }
-            4 => { build_zig_custom_llvm(); }
-            5 => { show_flag_presets(); }
-            6 => { show_help(); }
-            7 => {
+            2 => { stop_compiler_explorer(); }
+            3 => { build_llvm_upstream(); }
+            4 => { build_llvm_branch(); }
+            5 => { build_zig_custom_llvm(); }
+            6 => { show_flag_presets(); }
+            7 => { show_help(); }
+            8 => {
                 println!("Goodbye!");
                 break;
             }

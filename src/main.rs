@@ -433,6 +433,7 @@ fn run_compiler_explorer() -> bool {
 
     // Check if CE is already running
     let pid_file = home.join("ce.pid");
+    let port_file = home.join("ce.port");
     if pid_file.exists() {
         if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
             if let Ok(pid) = pid_str.trim().parse::<i32>() {
@@ -443,13 +444,32 @@ fn run_compiler_explorer() -> bool {
                     .status()
                     .is_ok_and(|s| s.success());
                 if alive {
-                    println!("{} Compiler Explorer is already running (PID {}).",
-                        style("ℹ").cyan(), style(pid).bold());
+                    let port = port_file.exists()
+                        .then(|| std::fs::read_to_string(&port_file).ok())
+                        .flatten()
+                        .and_then(|s| s.trim().parse::<u16>().ok())
+                        .unwrap_or(CE_DEFAULT_PORT);
+                    let url = format!("http://localhost:{port}");
+                    println!("\n  {} Compiler Explorer is running on {} (PID {})",
+                        style("ℹ").cyan(),
+                        style(&url).cyan().underlined(),
+                        style(pid).bold());
+
+                    let open = Select::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Open in browser?")
+                        .items(&["Yes", "No"])
+                        .default(0)
+                        .interact()
+                        .unwrap_or(1);
+                    if open == 0 {
+                        let _ = Command::new("open").arg(&url).status();
+                    }
                     return true;
                 }
             }
         }
         let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&port_file);
     }
 
     let node_modules = ce_path.join("node_modules");
@@ -499,6 +519,7 @@ fn run_compiler_explorer() -> bool {
 
     let pid = child.id();
     std::fs::write(&pid_file, pid.to_string()).expect("failed to write ce.pid");
+    std::fs::write(&port_file, port.to_string()).expect("failed to write ce.port");
 
     // Tail the log file waiting for "Listening on" or an error
     use std::io::{BufRead, BufReader};
@@ -604,6 +625,7 @@ fn stop_compiler_explorer() -> bool {
         println!("{} Compiler Explorer is not running (stale PID {}).",
             style("ℹ").cyan(), pid);
         let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&home.join("ce.port"));
         return true;
     }
 
@@ -623,6 +645,7 @@ fn stop_compiler_explorer() -> bool {
         .status();
 
     let _ = std::fs::remove_file(&pid_file);
+    let _ = std::fs::remove_file(&home.join("ce.port"));
     println!("{} Compiler Explorer stopped.", style("✔").green().bold());
     true
 }

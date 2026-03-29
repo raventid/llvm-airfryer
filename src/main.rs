@@ -1387,7 +1387,28 @@ fn print_header(home: &PathBuf) {
         style(format!("(v{version})")).dim());
     println!("   {}:   {}", style("Home").dim(), style(home.display()).dim());
     println!("   {}:  {}", style("Builds").dim(), style(builds_dir().display()).dim());
-    println!("   {}:      {}\n", style("CE").dim(), style(ce_dir().display()).dim());
+    println!("   {}:      {}", style("CE").dim(), style(ce_dir().display()).dim());
+
+    let config = Config::load();
+    if let Some(ref llvm_path) = config.llvm_source_path {
+        let path = PathBuf::from(shellexpand::tilde(llvm_path).into_owned());
+        if path.exists() {
+            let branch = Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&path)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            if let Some(branch) = branch {
+                println!("   {}:   {} ({})",
+                    style("LLVM").dim(),
+                    style(&branch).yellow().bold(),
+                    style(path.display()).dim());
+            }
+        }
+    }
+    println!();
 }
 
 fn main() {

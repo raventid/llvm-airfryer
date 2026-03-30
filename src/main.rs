@@ -1402,7 +1402,7 @@ fn print_header(home: &PathBuf) {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             if let Some(branch) = branch {
                 println!("   {}:   {} ({})",
-                    style("LLVM").dim(),
+                    style("Selected branch").dim(),
                     style(&branch).yellow().bold(),
                     style(path.display()).dim());
             }

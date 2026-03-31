@@ -1140,7 +1140,8 @@ fn discover_zig_builds() -> Vec<(String, PathBuf, String)> {
 
 /// Scan all builds/llvm-* and builds/zig-* directories and generate CE configs.
 fn regenerate_ce_config() {
-    let ce_config_dir = ce_dir()
+    let ce_path = ce_dir();
+    let ce_config_dir = ce_path
         .join("etc")
         .join("config");
 
@@ -1149,6 +1150,13 @@ fn regenerate_ce_config() {
             "⚠ Compiler Explorer not found — download it first, then re-run to configure."
         );
         return;
+    }
+
+    // Clear CE compilation cache so rebuilt compilers produce fresh output
+    let cache_dir = ce_path.join("out").join("compiler-cache");
+    if cache_dir.exists() {
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        println!("  {} Cleared CE compilation cache", style("✔").green());
     }
 
     let clang_compilers = discover_llvm_builds();

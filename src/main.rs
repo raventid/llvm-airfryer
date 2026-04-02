@@ -8,7 +8,7 @@ use std::process::Command;
 mod resources;
 
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
-const ZIG_REPO: &str = "git@github.com:ziglang/zig.git";
+const ZIG_REPO: &str = "https://codeberg.org/ziglang/zig.git";
 const CE_DEFAULT_PORT: u16 = 10240;
 
 const MENU_ITEMS: &[&str] = &[
@@ -852,7 +852,22 @@ fn build_zig_custom_llvm() -> bool {
     // Clone or update Zig source
     if zig_src.exists() {
         println!("Updating Zig source...");
-        if !run_cmd("git", &["fetch", "--all"], &zig_src, "git fetch") {
+        let origin_url = Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(&zig_src)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+        if origin_url.as_deref() != Some(ZIG_REPO) {
+            println!("Updating Zig remote to {ZIG_REPO}...");
+            if !run_cmd("git", &["remote", "set-url", "origin", ZIG_REPO], &zig_src, "git remote set-url origin") {
+                return false;
+            }
+        }
+
+        if !run_cmd("git", &["fetch", "--all", "--tags"], &zig_src, "git fetch") {
             return false;
         }
     } else {
@@ -869,12 +884,20 @@ fn build_zig_custom_llvm() -> bool {
         }
     }
 
+    // If a previous run patched Findllvm.cmake, reset it before switching refs.
+    let _ = Command::new("git")
+        .args(["checkout", "--", "cmake/Findllvm.cmake"])
+        .current_dir(&zig_src)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
     // Pick Zig branch/tag
     let zig_tags = git_tags(&zig_src);
     let zig_branches = git_branches(&zig_src);
     let mut zig_refs: Vec<String> = Vec::new();
     zig_refs.push("master".to_string());
-    for tag in zig_tags.iter().rev().take(10) {
+    for tag in zig_tags.iter().take(10) {
         zig_refs.push(format!("tag: {tag}"));
     }
     for branch in &zig_branches {
@@ -920,6 +943,8 @@ fn build_zig_custom_llvm() -> bool {
 
     let (llvm_id, llvm_exe, _) = &llvm_builds[llvm_idx];
     let llvm_install_dir = llvm_exe.parent().unwrap().parent().unwrap();
+    let findllvm_path = zig_src.join("cmake").join("Findllvm.cmake");
+    let mut restore_findllvm: Option<String> = None;
 
     // Detect LLVM version and check compatibility with Zig
     let llvm_config = llvm_install_dir.join("bin").join("llvm-config");
@@ -928,7 +953,6 @@ fn build_zig_custom_llvm() -> bool {
             let llvm_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let llvm_major = llvm_version.split('.').next().unwrap_or("?");
 
-            let findllvm_path = zig_src.join("cmake").join("Findllvm.cmake");
             if findllvm_path.exists() {
                 if let Ok(findllvm) = std::fs::read_to_string(&findllvm_path) {
                     // Look for the expected version pattern, e.g. "expected LLVM 21"
@@ -972,6 +996,7 @@ fn build_zig_custom_llvm() -> bool {
 
                             match choice {
                                 Some(0) => {
+                                    restore_findllvm = Some(findllvm.clone());
                                     // Patch Findllvm.cmake to skip the version range check.
                                     // The check is a VERSION_LESS/VERSION_GREATER if-block
                                     // that adds to an ignore list and continues the loop.
@@ -1032,6 +1057,13 @@ fn build_zig_custom_llvm() -> bool {
         ])
         .status()
         .expect("failed to run cmake for Zig");
+
+    if let Some(original_findllvm) = restore_findllvm {
+        if let Err(e) = std::fs::write(&findllvm_path, original_findllvm) {
+            eprintln!("failed to restore Findllvm.cmake after configure: {e}");
+        }
+    }
+
     if !status.success() {
         eprintln!("Zig cmake configure failed");
         return false;

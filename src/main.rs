@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod resources;
+mod patch_port;
 
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
 const ZIG_REPO: &str = "https://codeberg.org/ziglang/zig.git";
@@ -17,6 +18,7 @@ const MENU_ITEMS: &[&str] = &[
     "Stop Compiler Explorer",
     "Build LLVM Upstream",
     "Build LLVM Branch",
+    "Move Patch to LLVM Release",
     "Build Zig (Custom LLVM)",
     "CE Flag Presets",
     "Interesting Resources",
@@ -845,6 +847,11 @@ fn build_llvm_branch() -> bool {
     true
 }
 
+fn move_patch_to_llvm_release() -> bool {
+    let Some(llvm_dir) = prompt_llvm_dir() else { return false };
+    patch_port::move_patch_to_llvm_release(&llvm_dir)
+}
+
 fn build_zig_custom_llvm() -> bool {
     let bd = builds_dir();
     let zig_src = bd.join("zig-source");
@@ -1474,11 +1481,12 @@ fn main() {
             2 => { stop_compiler_explorer(); }
             3 => { build_llvm_upstream(); }
             4 => { build_llvm_branch(); }
-            5 => { build_zig_custom_llvm(); }
-            6 => { show_flag_presets(); }
-            7 => { resources::show_resources(); }
-            8 => { show_help(); }
-            9 => {
+            5 => { move_patch_to_llvm_release(); }
+            6 => { build_zig_custom_llvm(); }
+            7 => { show_flag_presets(); }
+            8 => { resources::show_resources(); }
+            9 => { show_help(); }
+            10 => {
                 println!("Goodbye!");
                 break;
             }

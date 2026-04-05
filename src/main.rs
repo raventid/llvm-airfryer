@@ -1,3 +1,4 @@
+use clap::Parser;
 use dialoguer::console::{Term, style};
 use dialoguer::{FuzzySelect, Input, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,17 @@ use std::process::Command;
 
 mod resources;
 mod patch_port;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "llvm-airfryer",
+    version,
+    about = "LLVM compiler framework development toolkit",
+    long_about = "LLVM Airfryer — interactive toolkit for building LLVM, Zig, and running \
+                  Compiler Explorer with custom compiler builds.\n\n\
+                  Run with no arguments to launch the interactive menu."
+)]
+struct Cli {}
 
 const COMPILER_EXPLORER_REPO: &str = "git@github.com:compiler-explorer/compiler-explorer.git";
 const ZIG_REPO: &str = "https://codeberg.org/ziglang/zig.git";
@@ -1460,6 +1472,7 @@ fn print_header(home: &PathBuf) {
 
 fn main() {
     let home = airfryer_home();
+    let _cli = Cli::parse();
     print_header(&home);
 
     loop {

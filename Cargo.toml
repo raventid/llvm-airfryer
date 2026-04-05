@@ -4,6 +4,7 @@ version = "0.2.9"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 dialoguer = { version = "0.12.0", features = ["fuzzy-select"] }
 serde = { version = "1", features = ["derive"] }
 shellexpand = "3"

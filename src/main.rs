@@ -751,7 +751,7 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
     println!("Configuring LLVM (generator: {generator})...");
     let install_prefix = format!("-DCMAKE_INSTALL_PREFIX={}", install_dir.display());
     let llvm_src = llvm_dir.join("llvm");
-    let cmake_configure_args: Vec<&str> = vec![
+    let mut cmake_configure_args: Vec<&str> = vec![
         "-S",
         llvm_src.to_str().unwrap(),
         "-B",
@@ -763,6 +763,14 @@ fn build_and_install_llvm(llvm_dir: &PathBuf, branch: &str, install_dir: &PathBu
         "-DLLVM_ENABLE_RUNTIMES=compiler-rt",
         &install_prefix,
     ];
+
+    // On Apple Silicon, pin the arm64 Homebrew prefix so CMake finds arm64
+    // libraries (zstd, zlib, libxml2, ...) in /opt/homebrew rather than an
+    // x86_64 Homebrew at /usr/local, which CMake's default search finds first
+    // and which would fail to link into an arm64 build.
+    if cfg!(target_arch = "aarch64") && std::path::Path::new("/opt/homebrew").exists() {
+        cmake_configure_args.push("-DCMAKE_PREFIX_PATH=/opt/homebrew");
+    }
 
     let status = Command::new("cmake")
         .args(&cmake_configure_args)
@@ -1319,6 +1327,38 @@ fn regenerate_ce_config() {
     }
     for (_, _, display) in &zig_compilers {
         println!("   • {display}");
+    }
+
+    // CE only discovers compilers at startup, so a running instance won't show
+    // newly built compilers until it is restarted. Offer to do that here.
+    let ce_running = std::fs::read_to_string(airfryer_home().join("ce.pid"))
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .is_some_and(|pid| {
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+
+    if ce_running {
+        let restart = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Restart Compiler Explorer to apply the change?")
+            .items(&["Yes", "No"])
+            .default(0)
+            .interact()
+            .unwrap_or(1);
+        if restart == 0 {
+            stop_compiler_explorer();
+            run_compiler_explorer();
+        } else {
+            println!(
+                "  {} Restart Compiler Explorer manually to see the new compiler(s).",
+                style("ℹ").cyan()
+            );
+        }
     }
 }
 
